@@ -17,13 +17,13 @@ def cfg():
 def test_line_counts_match_datasheets(cfg):
     """Guards against a line dropped or duplicated in transcription."""
     counts = {n: len(s["lines_nm"]) for n, s in cfg["gascell"]["species"].items()}
-    assert counts == {"H12C14N": 81, "H13C14N": 54, "12CO": 41, "13CO": 41}
+    assert counts == {"H12C14N": 81, "12CO": 41, "13CO": 41}
 
 
-def test_sasada_h12_agrees_with_certified_h13_spacing(cfg):
-    """The two HCN isotopologues come from different sources, so check the
-    H12C14N band is physically consistent: R and P branches must converge on
-    a common band origin, and the rotational constant must be sane."""
+def test_h12c14n_band_is_physically_consistent(cfg):
+    """The H12C14N table is calculated from fitted constants, not measured, so
+    check it against the physics: R and P branches must converge on a common
+    band origin, and the rotational constant must be sane."""
     lines = cfg["gascell"]["species"]["H12C14N"]["lines_nm"]
     wn = {k: 1e7 / v for k, v in lines.items()}
     # R(0) and P(1) share the J''=0 and J''=1 levels; their mean brackets the
@@ -37,7 +37,6 @@ def test_sasada_h12_agrees_with_certified_h13_spacing(cfg):
 def test_lines_lie_in_the_datasheet_range(cfg):
     ranges = {
         "H12C14N": (1514.0, 1571.0),
-        "H13C14N": (1525.0, 1565.0),
         "12CO": (1560.0, 1598.0),
         "13CO": (1595.0, 1633.0),
     }
@@ -50,7 +49,7 @@ def test_gas_lines_nm_filters_to_the_sweep(cfg):
     """The 1500-1640 nm sweep now covers every line in the cell."""
     lines = config.gas_lines_nm(cfg)
     assert {n: len(v) for n, v in lines.items()} == {
-        "H12C14N": 81, "H13C14N": 54, "12CO": 41, "13CO": 41
+        "H12C14N": 81, "12CO": 41, "13CO": 41
     }
     assert sorted(lines["12CO"].values()) == list(lines["12CO"].values())
 

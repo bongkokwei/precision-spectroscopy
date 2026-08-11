@@ -37,14 +37,15 @@ gascell:
   # are kept so a fit can report which line it anchored on.
   #
   # Only lines inside laser.start_nm..stop_nm are usable -- see
-  # config.gas_lines_nm(). With the 1510-1590 nm sweep above, 13CO
-  # (1595 nm+) contributes nothing.
+  # config.gas_lines_nm(). The 1500-1640 nm sweep above reaches every line
+  # in the cell.
   model: "Tri-H(80)-5/150/150"
   species:
 
-    # The standard tri mix uses H12CN, but the datasheet supplied was for
-    # H13CN, so both are listed. They are easy to tell apart on a real trace:
-    # only H12C14N has lines below 1527 nm. Drop whichever does not appear.
+    # The 5 Torr slot of the tri mix. A H13CN datasheet was supplied with the
+    # cell, but the model number and the 5 Torr fill both point to H12CN, and
+    # H13CN's 25 Torr table is the single-gas product. Confirm on the first
+    # scan: only H12C14N has lines below 1527 nm.
     H12C14N:
       # Sasada & Yamada 1990, Table VI, (2 0^0 0)-(0 0^0 0) band, converted
       # from vacuum wavenumbers. Calculated from fitted molecular constants,
@@ -77,27 +78,6 @@ gascell:
          R32:  1516.73993, R33:  1516.39797, R34:  1516.06628, R35:  1515.74486,
          R36:  1515.43368, R37:  1515.13276, R38:  1514.84205, R39:  1514.56162,
          R40:  1514.29137}
-
-    H13C14N:
-      # Datasheet table is 25 Torr (equiv. NIST SRM 2519a).
-      pressure_torr: 25
-      accuracy_pm: 0.24       # expanded (2 sigma), worst line (P7)
-      linewidth_pm: 16
-      lines_nm:
-        {R26: 1527.63342, R25: 1528.05474, R24: 1528.48574, R23: 1528.92643,
-         R22: 1529.37681, R21: 1529.83688, R20: 1530.30666, R19: 1530.78615,
-         R18: 1531.27537, R17: 1531.77430, R16: 1532.28298, R15: 1532.80139,
-         R14: 1533.32954, R13: 1533.86745, R12: 1534.41514, R11: 1534.97258,
-         R10: 1535.53981, R9:  1536.11683, R8:  1536.70364, R7:  1537.30029,
-         R6:  1537.90675, R5:  1538.52305, R4:  1539.14921, R3:  1539.78523,
-         R2:  1540.43120, R1:  1541.08703, R0:  1541.75280,
-         P1:  1543.11423, P2:  1543.80967, P3:  1544.51503, P4:  1545.23033,
-         P5:  1545.95549, P6:  1546.69055, P7:  1547.43558, P8:  1548.19057,
-         P9:  1548.95555, P10: 1549.73051, P11: 1550.51546, P12: 1551.31045,
-         P13: 1552.11546, P14: 1552.93051, P15: 1553.75562, P16: 1554.59079,
-         P17: 1555.43605, P18: 1556.29141, P19: 1557.15686, P20: 1558.03240,
-         P21: 1558.91808, P22: 1559.81389, P23: 1560.71983, P24: 1561.63593,
-         P25: 1562.56218, P26: 1563.49859, P27: 1564.44519}
 
     12CO:
       # Datasheet table is the 500 Torr single-gas cell; a tri-gas cell runs

@@ -20,9 +20,14 @@ pip install -e ".[dev]"      # processing only, no VISA stack needed
 
 ```bash
 spectro check   configs/default.yaml   # validate settings, no hardware touched
-spectro run     configs/default.yaml   # sweep, capture, process
-spectro process data/<run>/scan.h5     # reprocess an existing scan
+spectro run     configs/default.yaml   # sweep and capture; writes raw only
+spectro process data/<run>/scan.h5     # build the frequency ruler
 ```
+
+`run` acquires and stops. The raw record spans the whole capture window,
+including the parked-laser regions at each end where the MZI has no carrier,
+and how to trim those is not settled — so processing is a separate, explicit
+step rather than something every capture triggers.
 
 Each run creates `data/<timestamp>_<dut_name>/` containing `scan.h5`,
 `run.log`, `screenshot.png` and a copy of the config that produced them.

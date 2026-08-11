@@ -13,9 +13,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="spectro", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_run = sub.add_parser("run", help="acquire one sweep, then process it")
+    p_run = sub.add_parser("run", help="acquire one sweep")
     p_run.add_argument("config", help="path to the YAML config")
-    p_run.add_argument("--no-process", action="store_true", help="acquire only")
 
     p_check = sub.add_parser("check", help="validate a config without touching hardware")
     p_check.add_argument("config")
@@ -39,11 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "run":
         from . import acquire  # deferred: needs the VISA drivers
 
+        # Acquire only. The raw record still holds the parked-laser regions at
+        # both ends, and how to trim them is not settled -- so `spectro process`
+        # stays a separate, explicit step rather than running on every capture.
         cfg = config.load(args.config)
-        h5_path = acquire.run(cfg, config_path=args.config)
-        if not args.no_process:
-            ruler.process_file(h5_path)
-        print(h5_path)
+        print(acquire.run(cfg, config_path=args.config))
         return 0
 
     ruler.process_file(args.h5file, n_points=args.points)
