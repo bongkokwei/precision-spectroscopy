@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "precision-spectroscopy"
+version = "0.1.0"
+description = "Swept-wavelength spectroscopy of a DUT with a fibre-MZI frequency ruler"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+    "h5py",
+    "pyyaml",
+    "matplotlib",
+]
+
+# Instrument drivers are optional so processing works on a laptop with no VISA stack.
+[project.optional-dependencies]
+hw = [
+    "agilent-8164b @ git+https://github.com/bongkokwei/agilent-8164b",
+    "rigol-dho4204 @ git+https://github.com/bongkokwei/rigol_dho4204",
+]
+dev = ["pytest"]
+
+[project.scripts]
+spectro = "spectro.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-v"

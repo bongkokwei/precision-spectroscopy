@@ -1,0 +1,142 @@
+# Sweep is always continuous + oneway; that is hardcoded in acquire.py.
+
+scope:
+  resource: "USB0::0x1AB1::0x0610::HDO4A261600266::INSTR"
+  duration_s: 20.0          # capture window; must exceed the sweep duration
+  points: 50000000          # sample rate = points / duration_s
+  memory_depth: "50M"
+  channels:                 # role -> physical channel + vertical setup
+    mzi:     {ch: 1, scale: 2.00, offset: -4.0}
+    gascell: {ch: 2, scale: 1.00, offset: -6.0}
+    dut:     {ch: 3, scale: 0.05, offset: -0.1}
+    trigger: {ch: 4, scale: 5.00, offset:  0.0}
+
+laser:
+  resource: "GPIB0::21::INSTR"
+  slot: 0
+  channel: 1
+  start_nm: 1500.0
+  stop_nm: 1640.0
+  speed_nm_s: 10.0
+  power: 10.0
+  power_unit: "dBm"         # dBm | mW | uW | nW
+  output_path: "high"       # high | lowsse | both_high | both_low
+
+process:
+  # Measured free spectral range of the fibre MZI, in Hz. Calibrate this --
+  # a nominal fibre length is never the real optical delay.
+  mzi_fsr_hz: 41.0e6
+  # Optional [low, high] Hz band-pass applied before the Hilbert transform.
+  # Leave null unless the MZI trace has slow drift or broadband noise.
+  bandpass_hz: null
+
+gascell:
+  # Wavelength References tri-gas cell, 80 cm multi-pass (H(80) housing).
+  # NIST-traceable vacuum centre wavelengths in nm, transcribed from the
+  # per-species datasheets. Branch labels (R/P + rotational quantum number)
+  # are kept so a fit can report which line it anchored on.
+  #
+  # Only lines inside laser.start_nm..stop_nm are usable -- see
+  # config.gas_lines_nm(). With the 1510-1590 nm sweep above, 13CO
+  # (1595 nm+) contributes nothing.
+  model: "Tri-H(80)-5/150/150"
+  species:
+
+    # The standard tri mix uses H12CN, but the datasheet supplied was for
+    # H13CN, so both are listed. They are easy to tell apart on a real trace:
+    # only H12C14N has lines below 1527 nm. Drop whichever does not appear.
+    H12C14N:
+      # Sasada & Yamada 1990, Table VI, (2 0^0 0)-(0 0^0 0) band, converted
+      # from vacuum wavenumbers. Calculated from fitted molecular constants,
+      # not measured line-by-line: benchmarking the paper's H13C14N column
+      # against the 54 certified SRM 2519a wavelengths gives 0.38 pm RMS and
+      # 0.71 pm worst case, the error growing with |J|. Treat the low-|J|
+      # lines as the trustworthy anchors.
+      pressure_torr: 5
+      accuracy_pm: 0.7        # empirical, from the H13C14N cross-check above
+      linewidth_pm: 16
+      lines_nm:
+        {P1:   1534.52984, P2:   1535.23629, P3:   1535.95333, P4:   1536.68095,
+         P5:   1537.41922, P6:   1538.16813, P7:   1538.92767, P8:   1539.69784,
+         P9:   1540.47871, P10:  1541.27025, P11:  1542.07248, P12:  1542.88542,
+         P13:  1543.70908, P14:  1544.54348, P15:  1545.38859, P16:  1546.24448,
+         P17:  1547.11115, P18:  1547.98860, P19:  1548.87683, P20:  1549.77590,
+         P21:  1550.68579, P22:  1551.60651, P23:  1552.53809, P24:  1553.48054,
+         P25:  1554.43387, P26:  1555.39810, P27:  1556.37324, P28:  1557.35930,
+         P29:  1558.35631, P30:  1559.36426, P31:  1560.38319, P32:  1561.41313,
+         P33:  1562.45405, P34:  1563.50599, P35:  1564.56897, P36:  1565.64298,
+         P37:  1566.72806, P38:  1567.82423, P39:  1568.93149, P40:  1570.04985,
+         R0:   1533.14868, R1:   1532.47395, R2:   1531.80978, R3:   1531.15613,
+         R4:   1530.51304, R5:   1529.88044, R6:   1529.25834, R7:   1528.64676,
+         R8:   1528.04565, R9:   1527.45500, R10:  1526.87484, R11:  1526.30513,
+         R12:  1525.74586, R13:  1525.19702, R14:  1524.65859, R15:  1524.13061,
+         R16:  1523.61302, R17:  1523.10582, R18:  1522.60902, R19:  1522.12261,
+         R20:  1521.64655, R21:  1521.18088, R22:  1520.72553, R23:  1520.28055,
+         R24:  1519.84590, R25:  1519.42157, R26:  1519.00758, R27:  1518.60390,
+         R28:  1518.21050, R29:  1517.82744, R30:  1517.45464, R31:  1517.09215,
+         R32:  1516.73993, R33:  1516.39797, R34:  1516.06628, R35:  1515.74486,
+         R36:  1515.43368, R37:  1515.13276, R38:  1514.84205, R39:  1514.56162,
+         R40:  1514.29137}
+
+    H13C14N:
+      # Datasheet table is 25 Torr (equiv. NIST SRM 2519a).
+      pressure_torr: 25
+      accuracy_pm: 0.24       # expanded (2 sigma), worst line (P7)
+      linewidth_pm: 16
+      lines_nm:
+        {R26: 1527.63342, R25: 1528.05474, R24: 1528.48574, R23: 1528.92643,
+         R22: 1529.37681, R21: 1529.83688, R20: 1530.30666, R19: 1530.78615,
+         R18: 1531.27537, R17: 1531.77430, R16: 1532.28298, R15: 1532.80139,
+         R14: 1533.32954, R13: 1533.86745, R12: 1534.41514, R11: 1534.97258,
+         R10: 1535.53981, R9:  1536.11683, R8:  1536.70364, R7:  1537.30029,
+         R6:  1537.90675, R5:  1538.52305, R4:  1539.14921, R3:  1539.78523,
+         R2:  1540.43120, R1:  1541.08703, R0:  1541.75280,
+         P1:  1543.11423, P2:  1543.80967, P3:  1544.51503, P4:  1545.23033,
+         P5:  1545.95549, P6:  1546.69055, P7:  1547.43558, P8:  1548.19057,
+         P9:  1548.95555, P10: 1549.73051, P11: 1550.51546, P12: 1551.31045,
+         P13: 1552.11546, P14: 1552.93051, P15: 1553.75562, P16: 1554.59079,
+         P17: 1555.43605, P18: 1556.29141, P19: 1557.15686, P20: 1558.03240,
+         P21: 1558.91808, P22: 1559.81389, P23: 1560.71983, P24: 1561.63593,
+         P25: 1562.56218, P26: 1563.49859, P27: 1564.44519}
+
+    12CO:
+      # Datasheet table is the 500 Torr single-gas cell; a tri-gas cell runs
+      # 150 Torr, so expect a sub-pm pressure shift on top of accuracy_pm.
+      pressure_torr: 150
+      accuracy_pm: 0.3        # expanded (2 sigma), at 500 Torr
+      linewidth_pm: 17
+      lines_nm:
+        {R21: 1560.5013, R20: 1560.8668, R19: 1561.2588, R18: 1561.6775,
+         R17: 1562.1226, R16: 1562.5943, R15: 1563.0925, R14: 1563.6173,
+         R13: 1564.1687, R12: 1564.7467, R11: 1565.3513, R10: 1565.9825,
+         R9:  1566.6404, R8:  1567.3251, R7:  1568.0365, R6:  1568.7747,
+         R5:  1569.5396, R4:  1570.3314, R3:  1571.1501, R2:  1571.9957,
+         R1:  1572.8684, R0:  1573.7681,
+         P1:  1575.6491, P2:  1576.6303, P3:  1577.6389, P4:  1578.6749,
+         P5:  1579.7382, P6:  1580.8290, P7:  1581.9475, P8:  1583.0934,
+         P9:  1584.2672, P10: 1585.4687, P11: 1586.6982, P12: 1587.9555,
+         P13: 1589.2410, P14: 1590.5547, P15: 1591.8966, P16: 1593.2669,
+         P17: 1594.6657, P18: 1596.0930, P19: 1597.5489}
+
+    13CO:
+      # As above: table is 500 Torr, cell is 150 Torr.
+      pressure_torr: 150
+      accuracy_pm: 0.3
+      linewidth_pm: 17
+      lines_nm:
+        {R21: 1595.3759, R20: 1595.7541, R19: 1596.1582, R18: 1596.5883,
+         R17: 1597.0442, R16: 1597.5260, R15: 1598.0338, R14: 1598.5675,
+         R13: 1599.1273, R12: 1599.7130, R11: 1600.3248, R10: 1600.9626,
+         R9:  1601.6264, R8:  1602.3164, R7:  1603.0324, R6:  1603.7746,
+         R5:  1604.5630, R4:  1605.3376, R3:  1606.1585, R2:  1607.0056,
+         R1:  1607.8792, R0:  1608.7792,
+         P1:  1610.6589, P2:  1611.6385, P3:  1612.6449, P4:  1613.6779,
+         P5:  1614.7378, P6:  1615.8245, P7:  1616.9381, P8:  1618.0786,
+         P9:  1619.2462, P10: 1620.4408, P11: 1621.6629, P12: 1622.9120,
+         P13: 1624.1886, P14: 1625.4928, P15: 1626.8245, P16: 1628.1838,
+         P17: 1629.5910, P18: 1630.9860, P19: 1632.4289}
+
+run:
+  dir: "data"
+  dut_name: "ring01"
+  notes: ""
