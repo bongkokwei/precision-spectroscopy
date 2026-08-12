@@ -49,11 +49,19 @@ def _configure_scope(scope, cfg: dict) -> list[int]:
         scope.channel_scale(ch, ch_cfg["scale"])
         scope.channel_offset(ch, ch_cfg["offset"])
         channels.append(ch)
-        log.info("ch%d = %s (%.3g V/div, offset %.3g V)", ch, role, ch_cfg["scale"], ch_cfg["offset"])
+        log.info(
+            "ch%d = %s (%.3g V/div, offset %.3g V)",
+            ch,
+            role,
+            ch_cfg["scale"],
+            ch_cfg["offset"],
+        )
     return sorted(channels)
 
 
-def write_h5(path: Path, t: np.ndarray, data: dict[int, np.ndarray], cfg: dict, idn: dict) -> None:
+def write_h5(
+    path: Path, t: np.ndarray, data: dict[int, np.ndarray], cfg: dict, idn: dict
+) -> None:
     """Write raw traces plus everything needed to interpret them later.
 
     Samples are stored as float32 (the scope digitises to 12 bits, so float64
@@ -94,13 +102,24 @@ def run(cfg: dict, config_path: str | Path | None = None) -> Path:
     laser_cfg = cfg["laser"]
     log.info(
         "sweep %.1f-%.1f nm at %.1f nm/s (%.1f s), capturing %.1f s at %.2f MS/s",
-        laser_cfg["start_nm"], laser_cfg["stop_nm"], laser_cfg["speed_nm_s"],
-        sweep_duration_s(cfg), scope_cfg["duration_s"], sample_rate_hz(cfg) / 1e6,
+        laser_cfg["start_nm"],
+        laser_cfg["stop_nm"],
+        laser_cfg["speed_nm_s"],
+        sweep_duration_s(cfg),
+        scope_cfg["duration_s"],
+        sample_rate_hz(cfg) / 1e6,
     )
 
-    with DHO4204(scope_cfg["resource"]) as scope, Agilent8164B(
-        laser_cfg["resource"], slot=laser_cfg["slot"], channel=laser_cfg["channel"]
-    ) as laser:
+    with (
+        DHO4204(
+            scope_cfg["resource"],
+        ) as scope,
+        Agilent8164B(
+            laser_cfg["resource"],
+            slot=laser_cfg["slot"],
+            channel=laser_cfg["channel"],
+        ) as laser,
+    ):
         idn = {"scope": scope.idn(), "laser": laser.identify()}
         log.info("scope: %s", idn["scope"])
         log.info("laser: %s", idn["laser"])
