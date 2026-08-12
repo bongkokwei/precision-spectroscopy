@@ -61,6 +61,7 @@ def plot_scan(
     out_path: str | Path | None = None,
     max_points: int = 20_000,
     show: bool = False,
+    sweep: int | None = None,
 ) -> Path:
     """Plot every raw channel of a scan file and save the figure.
 
@@ -69,6 +70,9 @@ def plot_scan(
         out_path: Where to write the figure; defaults to scan.png beside the data.
         max_points: Points drawn per channel after envelope reduction.
         show: Open an interactive window as well as saving.
+        sweep: Plot only this forward sweep, indexed from the trigger edges
+            (negative indexes from the end). None plots the whole record,
+            flyback included.
 
     Returns:
         Path to the written figure.
@@ -82,7 +86,18 @@ def plot_scan(
     h5_path = Path(h5_path)
     out_path = Path(out_path) if out_path else h5_path.with_suffix(".png")
 
-    t_s, traces, _ = load_h5(h5_path)
+    t_s, traces, cfg = load_h5(h5_path)
+    title = h5_path.parent.name
+    if sweep is not None:
+        from . import sweeps as _sweeps
+
+        slices = _sweeps.sweep_slices(t_s, traces["trigger"], cfg)
+        if not slices:
+            raise ValueError("no complete sweep found in this record")
+        sl = slices[sweep]
+        t_s = t_s[sl] - t_s[sl.start]
+        traces = {k: v[sl] for k, v in traces.items()}
+        title += f"  sweep {sweep % len(slices) + 1}/{len(slices)}"
     fig, axes = plt.subplots(
         len(traces), 1, sharex=True, figsize=(12, 2.0 * len(traces))
     )
@@ -98,7 +113,7 @@ def plot_scan(
 
     axes[-1].set_xlabel("Time (s)")
     fig.align_ylabels(axes)
-    fig.suptitle(h5_path.parent.name, fontsize=10)
+    fig.suptitle(title, fontsize=10)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     log.info("wrote %s", out_path)

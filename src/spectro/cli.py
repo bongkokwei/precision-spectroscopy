@@ -26,6 +26,10 @@ def main(argv: list[str] | None = None) -> int:
     p_plot = sub.add_parser("plot", help="plot the raw channels of an existing scan")
     p_plot.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
     p_plot.add_argument("--show", action="store_true", help="open an interactive window")
+    p_plot.add_argument(
+        "--sweep", type=int, default=None,
+        help="plot only the Nth forward sweep (0-based), excluding the flyback",
+    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -42,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "plot":
         from . import plot
 
-        print(plot.plot_scan(args.h5file, show=args.show))
+        print(plot.plot_scan(args.h5file, show=args.show, sweep=args.sweep))
         return 0
 
     if args.cmd == "run":
