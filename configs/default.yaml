@@ -16,9 +16,10 @@ laser:
   slot: 0
   channel: 1
   start_nm: 1500.0
-  stop_nm: 1640.0
+  stop_nm: 1600.0
+  cycles: 0
   speed_nm_s: 10.0
-  power: 10.0
+  power: 12.0
   power_unit: "dBm"         # dBm | mW | uW | nW
   output_path: "high"       # high | lowsse | both_high | both_low
 

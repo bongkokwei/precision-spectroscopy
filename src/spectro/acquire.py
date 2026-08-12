@@ -30,7 +30,7 @@ def _configure_laser(laser, cfg: dict) -> None:
         laser_cfg["start_nm"],
         laser_cfg["stop_nm"],
         speed_nm_s=laser_cfg["speed_nm_s"],
-        cycles=1,
+        cycles=laser_cfg["cycles"],
         mode="continuous",
         repeat="oneway",
     )
