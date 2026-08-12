@@ -67,7 +67,9 @@ def plot_scan(
 
     Args:
         h5_path: Path to scan.h5.
-        out_path: Where to write the figure; defaults to scan.png beside the data.
+        out_path: Where to write the figure. Defaults to scan.png beside the
+            data, or scan_sweep_<n>.png when a single sweep is plotted, so a
+            sweep never overwrites the full-record view.
         max_points: Points drawn per channel after envelope reduction.
         show: Open an interactive window as well as saving.
         sweep: Plot only this forward sweep, indexed from the trigger edges
@@ -84,7 +86,7 @@ def plot_scan(
     import matplotlib.pyplot as plt
 
     h5_path = Path(h5_path)
-    out_path = Path(out_path) if out_path else h5_path.with_suffix(".png")
+    stem = h5_path.stem
 
     t_s, traces, cfg = load_h5(h5_path)
     title = h5_path.parent.name
@@ -97,7 +99,11 @@ def plot_scan(
         sl = slices[sweep]
         t_s = t_s[sl] - t_s[sl.start]
         traces = {k: v[sl] for k, v in traces.items()}
-        title += f"  sweep {sweep % len(slices) + 1}/{len(slices)}"
+        n = sweep % len(slices)  # resolve negatives so the filename is stable
+        stem = f"{stem}_sweep_{n}"
+        title += f"  sweep {n + 1}/{len(slices)}"
+
+    out_path = Path(out_path) if out_path else h5_path.with_name(f"{stem}.png")
     fig, axes = plt.subplots(
         len(traces), 1, sharex=True, figsize=(12, 2.0 * len(traces))
     )
