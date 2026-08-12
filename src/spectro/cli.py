@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     p_proc.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
     p_proc.add_argument("--points", type=int, default=None, help="output grid size")
 
+    p_plot = sub.add_parser("plot", help="plot the raw channels of an existing scan")
+    p_plot.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
+    p_plot.add_argument("--show", action="store_true", help="open an interactive window")
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
 
@@ -35,14 +39,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.cmd == "plot":
+        from . import plot
+
+        print(plot.plot_scan(args.h5file, show=args.show))
+        return 0
+
     if args.cmd == "run":
         from . import acquire  # deferred: needs the VISA drivers
+        from . import plot
 
         # Acquire only. The raw record still holds the parked-laser regions at
         # both ends, and how to trim them is not settled -- so `spectro process`
         # stays a separate, explicit step rather than running on every capture.
+        # A raw plot is cheap and is the first thing you look at, so it runs here.
         cfg = config.load(args.config)
-        print(acquire.run(cfg, config_path=args.config))
+        h5_path = acquire.run(cfg, config_path=args.config)
+        print(h5_path)
+        print(plot.plot_scan(h5_path))
         return 0
 
     ruler.process_file(args.h5file, n_points=args.points)
