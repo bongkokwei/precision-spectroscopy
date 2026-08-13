@@ -1,10 +1,14 @@
 """Fibre-MZI frequency ruler.
 
-The MZI trace is I(t) = A + B*cos(phi(t)) with phi(t) = 2*pi*(nu(t) - nu0)/FSR.
-Unwrapping the analytic-signal phase therefore counts fringes, and each fringe
-is one free spectral range of optical frequency -- independent of how nonlinear
-the laser's sweep actually was. That is the whole point of the auxiliary
-interferometer.
+The MZI trace is I(t) = A + B*cos(phi(t)), and phi advances by 2*pi for every
+free spectral range of optical frequency the laser covers. Unwrapping the
+analytic-signal phase therefore gives a monotonic coordinate that grows with
+optical frequency however nonlinear the sweep was.
+
+phi is deliberately *not* converted to Hz here. Doing that needs a single FSR,
+and fibre dispersion means there is no single FSR across 100 nm. Absolute
+frequency comes instead from fitting nu(phi) through gas-cell lines, which
+absorbs the dispersion into the fit -- steps 3 to 6.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.fft import next_fast_len
-from scipy.signal import butter, filtfilt, hilbert
+from scipy.signal import butter, hilbert, sosfiltfilt
 
 C_M_S = 299_792_458.0
 
@@ -29,15 +33,19 @@ def phase_rad(
     """Unwrapped analytic-signal phase of the MZI trace, in radians.
 
     Args:
-        mzi: Raw MZI channel samples.
+        mzi: MZI channel samples for one forward sweep.
         fs_hz: Sample rate.
-        bandpass_hz: Optional (low, high) band-pass applied before the Hilbert
-            transform. Use it when the trace carries slow drift -- the analytic
-            signal misbehaves badly on a signal with a wandering baseline.
+        bandpass_hz: (low, high) band-pass applied before the Hilbert
+            transform. Not optional in practice: on the raw trace the analytic
+            phase of this data goes non-monotonic, because low-frequency
+            intensity drift and broadband noise both leak into the phase.
+            Set it wide enough to hold the fringe rate over the whole sweep --
+            see process.bandpass_hz in the config.
 
     Returns:
-        Monotonically increasing phase. Note the Hilbert transform rings at both
-        ends of the record; trim a few per cent before trusting the edges.
+        Phase in radians, increasing with optical frequency travelled. The
+        Hilbert transform rings at both ends of the record; trim a few per cent
+        before trusting the edges.
     """
     x = np.asarray(mzi, dtype=float)
     x = x - x.mean()
@@ -45,14 +53,66 @@ def phase_rad(
     if bandpass_hz is not None:
         low, high = bandpass_hz
         nyq = 0.5 * fs_hz
-        b, a = butter(4, [low / nyq, min(high / nyq, 0.99)], btype="band")
-        x = filtfilt(b, a, x)
+        sos = butter(4, [low / nyq, min(high / nyq, 0.99)], btype="band", output="sos")
+        x = sosfiltfilt(sos, x)
 
     # Zero-pad to a fast FFT length: an awkward record length (a large prime,
-    # say) turns the transform of a 50 M-point trace pathologically slow.
+    # say) turns the transform of a 25 M-point trace pathologically slow.
     n = len(x)
     analytic = hilbert(x, N=next_fast_len(n))[:n]
-    return np.unwrap(np.angle(analytic))
+    phi = np.unwrap(np.angle(analytic))
+    # Compare neighbours rather than np.diff: the boolean array costs 25 MB on a
+    # record where the float64 difference would cost 200. Every sample is
+    # checked, because a slip is local and a strided check walks straight past it.
+    slips = int(np.count_nonzero(phi[1:] <= phi[:-1]))
+    if slips:
+        log.warning(
+            "MZI phase steps backwards at %d of %d samples -- widen or re-centre "
+            "process.bandpass_hz, or the frequency axis will fold back on itself",
+            slips, n,
+        )
+    return phi
+
+
+def sweep_phase(
+    h5_path: str | Path,
+    sweep: int = 0,
+    bandpass_hz: tuple[float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict]:
+    """MZI phase over one forward sweep of a scan file (steps 1 and 2).
+
+    Args:
+        h5_path: Path to scan.h5.
+        sweep: Which forward sweep, indexed from the trigger edges.
+        bandpass_hz: Overrides the band-pass frozen into the file at
+            acquisition time. Needed for records written before that setting
+            had a sensible default, and handy for tuning the band on a record
+            whose fringe rate you have just measured.
+
+    Returns:
+        (t_rel_s, phi_rad, mzi, cfg) for that sweep alone; mzi is returned so a
+        caller can check the phase against the fringes it came from. Time is
+        re-zeroed to the trigger edge.
+    """
+    from .plot import load_h5  # ponytail: I/O helper lives with the plotter
+    from .sweeps import sweep_slices
+
+    t_s, traces, cfg = load_h5(h5_path, roles=("mzi", "trigger"))
+    slices = sweep_slices(t_s, traces.pop("trigger"), cfg)
+    if not slices:
+        raise ValueError("no complete forward sweep in this record")
+    sl = slices[sweep]
+
+    fs_hz = 1.0 / float(t_s[1] - t_s[0])
+    mzi = traces["mzi"][sl]
+    if bandpass_hz is not None:
+        cfg["process"]["bandpass_hz"] = list(bandpass_hz)
+    phi = phase_rad(mzi, fs_hz, cfg["process"].get("bandpass_hz"))
+    log.info(
+        "sweep %d: %.3f Mfringe over %.2f s",
+        sweep, (phi[-1] - phi[0]) / (2 * np.pi) / 1e6, len(phi) / fs_hz,
+    )
+    return t_s[sl] - t_s[sl.start], phi, mzi, cfg
 
 
 def relative_freq_hz(

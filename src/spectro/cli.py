@@ -30,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
         "--sweep", type=int, default=None,
         help="plot only the Nth forward sweep (0-based), excluding the flyback",
     )
+    p_plot.add_argument(
+        "--phase", action="store_true",
+        help="plot the MZI phase diagnostics for --sweep instead of the raw channels",
+    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -46,7 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "plot":
         from . import plot
 
-        print(plot.plot_scan(args.h5file, show=args.show, sweep=args.sweep))
+        if args.phase:
+            print(plot.plot_phase(args.h5file, sweep=args.sweep or 0, show=args.show))
+        else:
+            print(plot.plot_scan(args.h5file, show=args.show, sweep=args.sweep))
         return 0
 
     if args.cmd == "run":

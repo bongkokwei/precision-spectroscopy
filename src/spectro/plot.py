@@ -21,11 +21,16 @@ log = logging.getLogger(__name__)
 PALETTE = ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9", "#D55E00"]
 
 
-def load_h5(h5_path: str | Path) -> tuple[np.ndarray, dict[str, np.ndarray], dict]:
+def load_h5(
+    h5_path: str | Path, roles: tuple[str, ...] | None = None
+) -> tuple[np.ndarray, dict[str, np.ndarray], dict]:
     """Read a scan file written by `spectro run`.
 
     Args:
         h5_path: Path to scan.h5.
+        roles: Only read these roles. A full record is ~200 MB per channel, so
+            a caller that needs two of them should say so rather than pay for
+            four. None reads everything.
 
     Returns:
         (t_s, traces, cfg) where traces maps role name -> samples. Channels with
@@ -37,7 +42,10 @@ def load_h5(h5_path: str | Path) -> tuple[np.ndarray, dict[str, np.ndarray], dic
         t_s = f.attrs["t0_s"] + f.attrs["dt_s"] * np.arange(n)
         role_of = {c["ch"]: role for role, c in cfg["scope"]["channels"].items()}
         traces = {
-            role_of.get(int(name[2:]), name): f["raw"][name][:] for name in f["raw"]
+            role: f["raw"][name][:]
+            for name in f["raw"]
+            for role in [role_of.get(int(name[2:]), name)]
+            if roles is None or role in roles
         }
     return t_s, traces, cfg
 
@@ -121,6 +129,112 @@ def plot_scan(
     fig.align_ylabels(axes)
     fig.suptitle(title, fontsize=10)
     fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    log.info("wrote %s", out_path)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return out_path
+
+
+def plot_phase(
+    h5_path: str | Path,
+    sweep: int = 0,
+    out_path: str | Path | None = None,
+    show: bool = False,
+    zoom_fringes: float = 8.0,
+    bandpass_hz: tuple[float, float] | None = None,
+) -> Path:
+    """Diagnostic plot of the MZI phase for one forward sweep.
+
+    Four panels, top to bottom: a few fringes of the band-passed trace with
+    cos(phi) laid over them, which is the check that the phase actually tracks
+    the fringes; total fringes phi/2pi; the departure of phi from a straight
+    line, which is the laser's sweep nonlinearity; and the instantaneous fringe
+    rate, which is proportional to the tuning rate.
+
+    Args:
+        h5_path: Path to scan.h5.
+        sweep: Which forward sweep to use.
+        out_path: Figure path; defaults to scan_phase_<sweep>.png beside the data.
+        show: Open an interactive window as well as saving.
+        zoom_fringes: Width of the top panel's window, in fringes.
+        bandpass_hz: Passed to ruler.sweep_phase; overrides the file's setting.
+
+    Returns:
+        Path to the written figure.
+    """
+    import matplotlib
+
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from . import ruler
+
+    h5_path = Path(h5_path)
+    t_s, phi, mzi, cfg = ruler.sweep_phase(h5_path, sweep, bandpass_hz)
+    fringes = phi / (2 * np.pi)
+
+    # phi is smooth and monotonic, so plain striding is safe here -- unlike the
+    # raw fringes, which alias and need the min/max envelope.
+    step = max(len(phi) // 20_000, 1)
+    ts, fs_dec = t_s[::step], fringes[::step]
+    line = np.polyval(np.polyfit(ts, fs_dec, 1), ts)
+    rate = np.diff(fs_dec) / np.diff(ts)  # fringes/s == Hz
+
+    # Top panel: the middle of the sweep, a handful of fringes wide.
+    mid = len(phi) // 2
+    n_zoom = int(zoom_fringes / (rate[len(rate) // 2] * (t_s[1] - t_s[0])))
+    z = slice(mid, mid + n_zoom)
+
+    fig, axes = plt.subplots(4, 1, figsize=(12, 9))
+    ax = axes[0]
+    x = mzi[z].astype(float)
+    x = (x - x.mean()) / (0.5 * np.ptp(x))
+    t_us = (t_s[z] - t_s[mid]) * 1e6
+    ax.plot(t_us, x, lw=0.9, color=PALETTE[0], label="MZI (normalised)")
+    ax.plot(t_us, np.cos(phi[z]), lw=0.9, ls="--", color=PALETTE[5], label=r"$\cos\phi$")
+    ax.set_xlabel("Time from mid-sweep (µs)")
+    ax.set_ylabel("Amplitude")
+    ax.legend(loc="upper right", fontsize=8, frameon=False)
+
+    axes[1].plot(ts, fs_dec / 1e6, lw=1.0, color=PALETTE[1])
+    axes[1].set_ylabel(r"$\phi/2\pi$" + "\n(Mfringe)")
+
+    axes[2].plot(ts, (fs_dec - line) / 1e3, lw=1.0, color=PALETTE[2])
+    axes[2].set_ylabel("Departure from\nlinear (kfringe)")
+
+    axes[3].plot(ts[:-1], rate / 1e3, lw=0.5, alpha=0.5, color=PALETTE[3])
+    # The raw rate carries a real ~200 Hz tuning ripple, so overlay a smoothed
+    # trend rather than let the ripple hide the drift underneath it.
+    k = max(len(rate) // 50, 1)
+    smooth = np.convolve(rate, np.ones(k) / k, mode="valid")
+    axes[3].plot(
+        ts[k // 2 : k // 2 + len(smooth)], smooth / 1e3, lw=1.2, color=PALETTE[5]
+    )
+    axes[3].set_ylabel("Fringe rate\n(kHz)")
+    axes[3].set_xlabel("Time from trigger (s)")
+
+    for a in axes:
+        a.grid(True, alpha=0.25, lw=0.5)
+        a.margins(x=0.005)
+        for side in ("top", "right"):
+            a.spines[side].set_visible(False)
+
+    bp = cfg["process"].get("bandpass_hz")
+    fig.suptitle(
+        f"{h5_path.parent.name}  sweep {sweep}  "
+        f"band-pass {bp[0] / 1e3:.0f}–{bp[1] / 1e3:.0f} kHz"
+        if bp
+        else f"{h5_path.parent.name}  sweep {sweep}  no band-pass",
+        fontsize=10,
+    )
+    fig.align_ylabels(axes)
+    fig.tight_layout()
+    out_path = Path(out_path) if out_path else h5_path.with_name(
+        f"{h5_path.stem}_phase_{sweep}.png"
+    )
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     log.info("wrote %s", out_path)
     if show:

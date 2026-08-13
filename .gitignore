@@ -4,4 +4,4 @@ __pycache__/
 *.egg-info/
 data/
 *.h5
-sandbox/
+sandbox/.DS_Store

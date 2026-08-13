@@ -9,7 +9,7 @@ would be useless on real hardware.
 import numpy as np
 import pytest
 
-from spectro.ruler import relative_freq_hz, resample_uniform
+from spectro.ruler import phase_rad, relative_freq_hz, resample_uniform
 
 FSR_HZ = 41.0e6  # ~5 m of fibre
 FS_HZ = 1.0e6
@@ -101,6 +101,29 @@ def test_resonance_lands_at_the_right_frequency_end_to_end():
     grid, dut_uniform = resample_uniform(nu_rec - offset, dut, trim_frac=TRIM)
     recovered = grid[np.argmin(dut_uniform)]
     assert abs(recovered - nu_true[idx]) < 1.0e6
+
+
+def test_bandpass_saves_the_phase_from_a_drifting_baseline():
+    """Slow intensity drift is what breaks the analytic phase on real traces.
+
+    The 20260813 record does exactly this: unwrapped straight off the raw MZI
+    the phase goes non-monotonic, and band-passing it fixes that. The drift here
+    is deliberately larger than the fringes themselves, as it is on a trace
+    whose photodiode is riding the laser's output-power ripple.
+    """
+    t, signal, nu_true = synthetic_mzi()
+    phi_true = 2.0 * np.pi * nu_true / FSR_HZ
+    drifted = signal + 3.0 * np.sin(2.0 * np.pi * 20.0 * t)
+
+    # The chirp runs 7.3 -> 17.1 kHz; leave the usual ~1.5x margin either side.
+    phi = phase_rad(drifted, FS_HZ, bandpass_hz=(5.0e3, 25.0e3))
+    err = _spacing_error(phi, phi_true)
+    assert np.all(np.diff(_interior(phi)) > 0), "band-passed phase must be monotonic"
+    assert err.max() < 0.05, f"worst phase error {err.max():.4f} rad"
+
+    # Without the band-pass the same trace is unusable -- if this ever stops
+    # being true the band-pass has become optional, not the test wrong.
+    assert not np.all(np.diff(_interior(phase_rad(drifted, FS_HZ))) > 0)
 
 
 def test_resample_rejects_length_mismatch():
