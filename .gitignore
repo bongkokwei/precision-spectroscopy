@@ -1,7 +1,2 @@
-__pycache__/
-*.pyc
-.pytest_cache/
-*.egg-info/
-data/
-*.h5
-sandbox/.DS_Store
+sandbox/
+.DS_Store
