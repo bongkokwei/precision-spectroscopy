@@ -6,10 +6,21 @@ quadratic in time. If the ruler only worked for a perfectly linear sweep it
 would be useless on real hardware.
 """
 
+import h5py
 import numpy as np
 import pytest
 
-from spectro.ruler import phase_rad, relative_freq_hz, resample_uniform
+from spectro.ruler import (
+    assign_lines,
+    find_dips,
+    fit_nu_phi,
+    fit_resonances,
+    nu_hz,
+    phase_rad,
+    read_ruler_fit,
+    relative_freq_hz,
+    resample_uniform,
+)
 
 FSR_HZ = 41.0e6  # ~5 m of fibre
 FS_HZ = 1.0e6
@@ -129,3 +140,233 @@ def test_bandpass_saves_the_phase_from_a_drifting_baseline():
 def test_resample_rejects_length_mismatch():
     with pytest.raises(ValueError):
         resample_uniform(np.arange(10.0), np.arange(9.0))
+
+
+# --- step 3: gas-cell dips ---------------------------------------------------
+#
+# One decimated sample per pm of sweep, matching gas_anchors' default, so
+# "samples" and "pm" are interchangeable throughout these tests.
+
+LINE_FWHM_PM = 16.0
+GAS_CFG = {
+    "laser": {"start_nm": 1500.0, "stop_nm": 1600.0, "speed_nm_s": 10.0},
+    "gascell": {
+        "species": {
+            "HCN": {"linewidth_pm": LINE_FWHM_PM,
+                    "lines_nm": {"P1": 1534.52984, "P2": 1535.23629, "P3": 1535.95333}},
+            "CO": {"linewidth_pm": LINE_FWHM_PM, "lines_nm": {"R4": 1570.3314}},
+        }
+    },
+}
+
+
+def synthetic_gascell(centres, depths=None, noise=0.002, seed=0):
+    """Transmission trace with Gaussian absorption lines, on a realistic baseline.
+
+    The baseline matters more than the noise here. A real gas-cell trace rides
+    on the laser's output-power ripple, and that ripple is only ~30x below the
+    weakest line on the 20260813 record -- so a detector that only thresholds,
+    without caring how wide a feature is, finds the ripple too.
+    """
+    x = np.arange(20_000.0)
+    sigma = LINE_FWHM_PM / 2.355
+    y = 1.0 + 0.15 * np.sin(2.0 * np.pi * x / 5000.0)  # source power ripple
+    for c, d in zip(centres, depths or [0.5] * len(centres)):
+        y -= d * np.exp(-0.5 * ((x - c) / sigma) ** 2)
+    return y + noise * np.random.default_rng(seed).standard_normal(len(x))
+
+
+def test_find_dips_locates_lines_to_a_fraction_of_a_linewidth():
+    centres = [2000.0, 2500.5, 9000.0, 15_000.0]
+    pos, depth = find_dips(synthetic_gascell(centres), LINE_FWHM_PM)
+    assert len(pos) == len(centres), f"found {len(pos)}, expected {len(centres)}"
+    assert np.allclose(pos, centres, atol=0.1 * LINE_FWHM_PM), pos - centres
+    # Depth is prominence, measured against the local baseline, so a line
+    # sitting in a trough of the ripple reports the trough as well. It is a
+    # diagnostic, not a photometric measurement -- only the position is used.
+    assert np.all(depth > 0.45) and np.all(depth < 0.85), depth
+
+
+def test_find_dips_ignores_features_of_the_wrong_width():
+    """Width, not depth, is what separates a line from a glitch or a ripple.
+
+    Both intruders here are deeper than the real line, so a threshold alone
+    would take all three.
+    """
+    y = synthetic_gascell([9000.0], depths=[0.3], noise=0.0)
+    y[4000] -= 1.0  # single-sample glitch
+    y[13_000:15_000] -= 1.0  # 2 nm dropout, e.g. the laser losing lock
+    pos, _ = find_dips(y, LINE_FWHM_PM)
+    assert np.allclose(pos, [9000.0], atol=1.0), pos
+
+
+def test_find_dips_survives_a_saturated_line():
+    """A strong line bottoms out flat; its centre is still the middle of it."""
+    y = np.clip(synthetic_gascell([9000.0], depths=[3.0], noise=0.0), 0.0, None)
+    pos, _ = find_dips(y, LINE_FWHM_PM)
+    assert np.allclose(pos, [9000.0], atol=1.0), pos
+
+
+def test_assign_lines_identifies_dips_within_the_dial_error():
+    """A 20 pm systematic offset is what the real laser dial does; it must not
+    stop the lines being identified, since they are 400+ pm apart."""
+    truth = [("HCN", "P1", 1534.52984), ("HCN", "P3", 1535.95333), ("CO", "R4", 1570.3314)]
+    measured = np.array([nm + 0.020 for _, _, nm in truth])
+    assert assign_lines(measured, GAS_CFG) == truth
+
+
+def test_assign_lines_rejects_a_dip_that_is_no_line():
+    """A spurious dip 60 pm off a line is inside tol_nm, but it is nowhere near
+    the residual cluster the genuine matches form, which is what catches it."""
+    measured = np.array([1534.52984, 1535.23629, 1535.95333 + 0.060, 1550.0])
+    matched = assign_lines(measured, GAS_CFG)
+    assert [m[1] if m else None for m in matched] == ["P1", "P2", None, None]
+
+
+def test_assign_lines_gives_one_line_to_one_dip():
+    """Two dips near the same line would otherwise anchor one frequency twice."""
+    matched = assign_lines(np.array([1534.51984, 1534.53084]), GAS_CFG)
+    assert [m[1] if m else None for m in matched] == [None, "P1"]
+
+
+def test_assign_lines_only_offers_lines_inside_the_sweep():
+    narrow = {**GAS_CFG, "laser": {**GAS_CFG["laser"], "stop_nm": 1540.0}}
+    assert assign_lines(np.array([1570.3314]), narrow) == [None]
+
+
+# --- step 4: nu(phi) fit ------------------------------------------------------
+
+FIT_CFG = {
+    "gascell": {"species": {"H12C14N": {"accuracy_pm": 0.7}, "12CO": {"accuracy_pm": 0.3}}}
+}
+
+
+def _anchors(phi, nu, species="12CO", label="R1"):
+    return [
+        {"species": species, "label": label, "phi_rad": p, "nu_hz": n}
+        for p, n in zip(phi, nu)
+    ]
+
+
+def test_fit_nu_phi_recovers_a_known_quadratic():
+    """Anchors sampled exactly off a quadratic must refit to the same law.
+
+    phi here runs to 1e6 rad, the real regime (a 100 nm sweep is ~1e7 rad of
+    MZI phase) -- a raw numpy.polyfit/polyval at this scale is badly
+    conditioned, which is why fit_nu_phi uses numpy.polynomial.Polynomial
+    (domain-scaled) instead. This test would silently pass with a huge but
+    unnoticed error if that scaling were ever dropped, so it checks recovered
+    values, not just that *some* fit converged.
+    """
+    true_coeffs = [-1.0e3, 5.0e13, 1.936e14]  # Hz/rad^2, Hz/rad, Hz
+    phi = np.linspace(0.0, 2.0e6, 60)
+    nu = np.polyval(true_coeffs, phi)
+    fit = fit_nu_phi(_anchors(phi, nu), FIT_CFG)
+    assert fit["n_anchors"] == 60
+    assert fit["dropped_high_j"] == 0
+    # Float64 leaves a few 1e4 Hz of noise on a nu ~2e14 Hz scale (relative
+    # 1e-10) even with domain scaling -- four orders below the 90 MHz the
+    # catalogue itself limits real fits to, so it is exact for any practical
+    # purpose. The real assertion is "orders of magnitude better than the
+    # catalogue floor", not "zero".
+    assert fit["rms_hz"] < 1.0e5
+    probe = np.linspace(phi.min(), phi.max(), 200)
+    assert np.allclose(nu_hz(probe, fit), np.polyval(true_coeffs, probe), atol=1.0e5)
+
+
+def test_fit_nu_phi_drops_high_j_h12c14n_but_keeps_low_j():
+    anchors = _anchors([0.0, 1.0], [1.0e14, 1.1e14], species="H12C14N", label="P25")
+    anchors += _anchors([2.0], [1.2e14], species="H12C14N", label="R5")
+    anchors += _anchors([3.0, 4.0], [1.3e14, 1.4e14], species="12CO", label="R1")
+    fit = fit_nu_phi(anchors, FIT_CFG, degree=1, max_j=20)
+    assert fit["n_anchors"] == 3  # the two P25 anchors (|J|=25) are dropped
+    assert fit["dropped_high_j"] == 2
+
+
+def test_fit_nu_phi_raises_when_too_few_anchors_survive():
+    anchors = _anchors([0.0, 1.0, 2.0], [1.0e14, 1.1e14, 1.2e14])
+    with pytest.raises(ValueError):
+        fit_nu_phi(anchors, FIT_CFG, degree=5)
+
+
+# --- step 5: reading a fit back out of the file --------------------------------
+
+
+def test_read_ruler_fit_round_trips_fit_ruler_output(tmp_path):
+    """fit_ruler() writes these attrs; read_ruler_fit() must read the same ones."""
+    h5_path = tmp_path / "scan.h5"
+    coeffs = [1.0, 2.0, 3.0]
+    domain = [0.0, 10.0]
+    with h5py.File(h5_path, "w") as f:
+        grp = f.require_group("ruler/sweep_0")
+        grp.attrs["coeffs_hz"] = coeffs
+        grp.attrs["domain_rad"] = domain
+        grp.attrs["degree"] = 2
+        grp.attrs["rms_hz"] = 5.84e7
+        grp.attrs["n_anchors"] = 91
+        grp.attrs["dropped_high_j"] = 22
+
+    fit = read_ruler_fit(h5_path, sweep=0)
+    assert fit["coeffs"] == coeffs
+    assert fit["domain"] == domain
+    assert fit["n_anchors"] == 91
+    # domain midpoint maps to the Polynomial's own origin, where only the
+    # constant term survives -- a cheap check that the coeffs/domain pairing
+    # (not just their values individually) came back correctly.
+    assert abs(nu_hz(5.0, fit) - coeffs[0]) < 1.0e-9
+
+
+def test_read_ruler_fit_raises_for_missing_sweep(tmp_path):
+    h5_path = tmp_path / "scan.h5"
+    with h5py.File(h5_path, "w") as f:
+        f.require_group("ruler/sweep_0")
+    with pytest.raises(ValueError):
+        read_ruler_fit(h5_path, sweep=1)
+
+
+# --- step 6: resonance fitting --------------------------------------------------
+#
+# FSR and FWHM chosen to match the 20260813 ring (~100 GHz FSR, ~200 MHz
+# linewidth, Q ~ 1e6) -- the same reason test_ruler.py's MZI tests use a
+# realistic fringe count rather than a handful of cycles.
+
+FSR_TEST_HZ = 1.0e11
+FWHM_TEST_HZ = 2.0e8
+
+
+def synthetic_resonances(n=5, amp=0.12, baseline=-58.1, noise=2.0e-4, seed=0):
+    """A DUT-like spectrum: n evenly spaced Lorentzians on a flat baseline."""
+    f0s = 190.0e12 + FSR_TEST_HZ * np.arange(n)
+    freq_hz = np.arange(f0s[0] - 5 * FWHM_TEST_HZ, f0s[-1] + 5 * FWHM_TEST_HZ, 2.0e6)
+    y = np.full_like(freq_hz, baseline)
+    for f0 in f0s:
+        y = y + amp / (1.0 + ((freq_hz - f0) / (0.5 * FWHM_TEST_HZ)) ** 2)
+    if noise:
+        y = y + noise * np.random.default_rng(seed).standard_normal(len(freq_hz))
+    return freq_hz, y, f0s
+
+
+def test_fit_resonances_recovers_known_peaks():
+    freq_hz, dut, f0s = synthetic_resonances()
+    fit = fit_resonances(freq_hz, dut, expected_fwhm_hz=FWHM_TEST_HZ, snr=20.0)
+    assert len(fit) == len(f0s)
+    recovered = sorted(r["f0_hz"] for r in fit)
+    assert np.allclose(recovered, f0s, atol=1.0e6)
+    assert all(abs(r["fwhm_hz"] - FWHM_TEST_HZ) / FWHM_TEST_HZ < 0.05 for r in fit)
+    assert all(r["amp_hz"] > 0 for r in fit)
+
+
+def test_fit_resonances_recovers_dips_too():
+    """A resonance can be a dip depending on which DUT port is recorded --
+    unlike find_dips, fit_resonances must not assume a direction."""
+    freq_hz, dut, f0s = synthetic_resonances(amp=-0.12)
+    fit = fit_resonances(freq_hz, dut, expected_fwhm_hz=FWHM_TEST_HZ, snr=20.0)
+    assert len(fit) == len(f0s)
+    assert all(r["amp_hz"] < 0 for r in fit)
+
+
+def test_fit_resonances_returns_empty_on_pure_noise():
+    rng = np.random.default_rng(0)
+    freq_hz = np.arange(190.0e12, 191.0e12, 2.0e6)
+    dut = -58.1 + 2.0e-4 * rng.standard_normal(len(freq_hz))
+    assert fit_resonances(freq_hz, dut, expected_fwhm_hz=FWHM_TEST_HZ, snr=20.0) == []

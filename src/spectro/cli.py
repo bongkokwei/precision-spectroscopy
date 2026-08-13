@@ -34,6 +34,30 @@ def main(argv: list[str] | None = None) -> int:
         "--phase", action="store_true",
         help="plot the MZI phase diagnostics for --sweep instead of the raw channels",
     )
+    p_plot.add_argument(
+        "--gas", action="store_true",
+        help="plot the gas-cell line identification for --sweep and list the anchors",
+    )
+    p_plot.add_argument(
+        "--resonances", action="store_true",
+        help="plot the DUT spectrum and fitted resonances for --sweep (steps 5-6); "
+        "run `spectro fit` first",
+    )
+    p_plot.add_argument(
+        "--expected-fwhm-hz", type=float, default=2.0e8,
+        help="order-of-magnitude resonance linewidth guess for --resonances (Hz)",
+    )
+
+    p_fit = sub.add_parser(
+        "fit", help="fit nu(phi) through the gas-cell anchors for one sweep (step 4)"
+    )
+    p_fit.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
+    p_fit.add_argument("--sweep", type=int, default=0, help="which forward sweep (0-based)")
+    p_fit.add_argument("--degree", type=int, default=2, help="polynomial degree")
+    p_fit.add_argument(
+        "--max-j", type=int, default=20,
+        help="drop H12C14N anchors with |J| above this",
+    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -50,10 +74,49 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "plot":
         from . import plot
 
-        if args.phase:
+        if args.gas:
+            anchors = ruler.gas_anchors(args.h5file, sweep=args.sweep or 0)
+            for a in anchors:
+                print(
+                    f"{a['species']:>8} {a['label']:<4} {a['lambda_nm']:12.5f} nm  "
+                    f"{a['nu_hz'] / 1e12:10.6f} THz  phi {a['phi_rad'] / 1e6:9.4f} Mrad  "
+                    f"depth {a['depth']:6.3f}  resid {a['residual_pm']:+7.1f} pm"
+                )
+            print(
+                plot.plot_gas(
+                    args.h5file, sweep=args.sweep or 0, show=args.show, anchors=anchors
+                )
+            )
+        elif args.resonances:
+            freq_hz, dut, resonances = ruler.find_resonances(
+                args.h5file, sweep=args.sweep or 0, expected_fwhm_hz=args.expected_fwhm_hz
+            )
+            for r in resonances:
+                print(
+                    f"{r['f0_hz'] / 1e12:10.6f} THz  fwhm {r['fwhm_hz'] / 1e6:7.2f} MHz  "
+                    f"Q {r['q']:9.0f}  amp {r['amp_hz']:+8.4f}"
+                )
+            print(
+                plot.plot_resonances(
+                    args.h5file, sweep=args.sweep or 0, show=args.show,
+                    freq_hz=freq_hz, dut=dut, resonances=resonances,
+                )
+            )
+        elif args.phase:
             print(plot.plot_phase(args.h5file, sweep=args.sweep or 0, show=args.show))
         else:
             print(plot.plot_scan(args.h5file, show=args.show, sweep=args.sweep))
+        return 0
+
+    if args.cmd == "fit":
+        fit = ruler.fit_ruler(
+            args.h5file, sweep=args.sweep, degree=args.degree, max_j=args.max_j
+        )
+        print(
+            f"sweep {args.sweep}: degree {fit['degree']} fit, {fit['n_anchors']} anchor(s) "
+            f"({fit['dropped_high_j']} dropped), {fit['rms_hz'] / 1e6:.1f} MHz RMS"
+        )
+        print(f"coeffs (Hz, highest power first): {fit['coeffs']}")
         return 0
 
     if args.cmd == "run":

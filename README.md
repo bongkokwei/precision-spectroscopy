@@ -22,6 +22,10 @@ pip install -e ".[dev]"      # processing only, no VISA stack needed
 spectro check   configs/default.yaml   # validate settings, no hardware touched
 spectro run     configs/default.yaml   # sweep and capture; writes raw only
 spectro process data/<run>/scan.h5     # build the frequency ruler
+
+spectro plot data/<run>/scan.h5                  # raw channels
+spectro plot data/<run>/scan.h5 --phase          # MZI phase diagnostics
+spectro plot data/<run>/scan.h5 --gas            # gas-cell line identification
 ```
 
 `run` acquires and stops. The raw record spans the whole capture window,

@@ -243,6 +243,191 @@ def plot_phase(
     return out_path
 
 
+def plot_gas(
+    h5_path: str | Path,
+    sweep: int = 0,
+    out_path: str | Path | None = None,
+    show: bool = False,
+    max_points: int = 20_000,
+    anchors: list[dict] | None = None,
+    **kwargs,
+) -> Path:
+    """Diagnostic plot of the gas-cell line identification for one sweep.
+
+    Two panels: the gascell trace against nominal wavelength with every
+    identified line ticked and coloured by species, and the residual of each
+    against its catalogue wavelength. The residual panel is the one to read --
+    it should be a single tight band a few tens of pm wide, sloping gently with
+    the laser's speed error. A point off that band is a misassignment.
+
+    Args:
+        h5_path: Path to scan.h5.
+        sweep: Which forward sweep to use.
+        out_path: Figure path; defaults to scan_gas_<sweep>.png beside the data.
+        show: Open an interactive window as well as saving.
+        max_points: Points drawn for the trace after envelope reduction.
+        anchors: Result of a ruler.gas_anchors() call you have already made.
+            Worth passing: recomputing them re-runs the Hilbert transform over
+            the whole sweep.
+        **kwargs: Passed to ruler.gas_anchors (snr, tol_nm, resolution_pm...).
+
+    Returns:
+        Path to the written figure.
+    """
+    import matplotlib
+
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from . import config, ruler
+    from .sweeps import sweep_slices
+
+    h5_path = Path(h5_path)
+    if anchors is None:
+        anchors = ruler.gas_anchors(h5_path, sweep, **kwargs)
+    if not anchors:
+        raise ValueError("no gas-cell line identified in this sweep; nothing to plot")
+
+    t_s, traces, cfg = load_h5(h5_path, roles=("gascell", "trigger"))
+    sl = sweep_slices(t_s, traces["trigger"], cfg)[sweep]
+    lam = config.nominal_lambda_nm(t_s[sl] - t_s[sl.start], cfg)
+
+    species = sorted({a["species"] for a in anchors})
+    colour = dict(zip(species, PALETTE))
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    axes[0].plot(*_envelope(lam, traces["gascell"][sl], max_points), lw=0.7, color="0.35")
+    span = np.ptp(traces["gascell"][sl])
+    for a in anchors:
+        axes[0].plot(
+            a["lambda_nm"], np.max(traces["gascell"][sl]) + 0.03 * span,
+            marker="v", ms=4, color=colour[a["species"]],
+        )
+    axes[0].set_ylabel("Gas cell\n(V)")
+
+    for s in species:
+        pts = [a for a in anchors if a["species"] == s]
+        axes[1].plot(
+            [a["lambda_nm"] for a in pts], [a["residual_pm"] for a in pts],
+            ls="none", marker="o", ms=4, color=colour[s], label=f"{s} ({len(pts)})",
+        )
+    axes[1].axhline(0.0, lw=0.8, color="0.6")
+    axes[1].set_ylabel("Nominal − catalogue\n(pm)")
+    axes[1].set_xlabel("Nominal wavelength (nm)")
+    axes[1].legend(loc="best", fontsize=8, frameon=False, ncol=len(species))
+
+    for ax in axes:
+        ax.grid(True, alpha=0.25, lw=0.5)
+        ax.margins(x=0.005)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+
+    fig.suptitle(
+        f"{h5_path.parent.name}  sweep {sweep}  {len(anchors)} anchors", fontsize=10
+    )
+    fig.align_ylabels(axes)
+    fig.tight_layout()
+    out_path = Path(out_path) if out_path else h5_path.with_name(
+        f"{h5_path.stem}_gas_{sweep}.png"
+    )
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    log.info("wrote %s", out_path)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return out_path
+
+
+def plot_resonances(
+    h5_path: str | Path,
+    sweep: int = 0,
+    out_path: str | Path | None = None,
+    show: bool = False,
+    max_points: int = 20_000,
+    freq_hz: np.ndarray | None = None,
+    dut: np.ndarray | None = None,
+    resonances: list[dict] | None = None,
+    **kwargs,
+) -> Path:
+    """Diagnostic plot of the DUT spectrum and its fitted resonances (steps 5-6).
+
+    Two panels: the DUT transmission against absolute frequency with each
+    fitted resonance centre ticked, and Q vs frequency below it -- the panel
+    to read for whether Q trends with wavelength (bend loss, say) or is flat.
+
+    Args:
+        h5_path: Path to scan.h5.
+        sweep: Which forward sweep to use.
+        out_path: Figure path; defaults to scan_resonances_<sweep>.png beside
+            the data.
+        show: Open an interactive window as well as saving.
+        max_points: Points drawn for the trace after envelope reduction.
+        freq_hz, dut, resonances: Result of a ruler.find_resonances() call you
+            have already made. Worth passing all three: a full sweep is
+            25 M samples per channel, so recomputing dut_spectrum a second
+            time roughly doubles peak memory on top of re-running the
+            Hilbert transform and every resonance fit.
+        **kwargs: Passed to ruler.find_resonances (expected_fwhm_hz, snr...).
+
+    Returns:
+        Path to the written figure.
+    """
+    import matplotlib
+
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from . import ruler
+
+    h5_path = Path(h5_path)
+    if freq_hz is None or dut is None or resonances is None:
+        freq_hz, dut, resonances = ruler.find_resonances(h5_path, sweep, **kwargs)
+    if not resonances:
+        raise ValueError("no resonance identified in this sweep; nothing to plot")
+
+    freq_thz = freq_hz / 1e12
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    axes[0].plot(*_envelope(freq_thz, dut, max_points), lw=0.7, color=PALETTE[0])
+    span = np.ptp(dut)
+    for r in resonances:
+        axes[0].plot(
+            r["f0_hz"] / 1e12, np.max(dut) + 0.05 * span,
+            marker="v", ms=4, color=PALETTE[1],
+        )
+    axes[0].set_ylabel("DUT\n(a.u.)")
+
+    axes[1].plot(
+        [r["f0_hz"] / 1e12 for r in resonances], [r["q"] for r in resonances],
+        ls="none", marker="o", ms=4, color=PALETTE[2],
+    )
+    axes[1].set_ylabel("Q")
+    axes[1].set_xlabel("Frequency (THz)")
+
+    for ax in axes:
+        ax.grid(True, alpha=0.25, lw=0.5)
+        ax.margins(x=0.005)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+
+    fig.suptitle(
+        f"{h5_path.parent.name}  sweep {sweep}  {len(resonances)} resonance(s)",
+        fontsize=10,
+    )
+    fig.align_ylabels(axes)
+    fig.tight_layout()
+    out_path = Path(out_path) if out_path else h5_path.with_name(
+        f"{h5_path.stem}_resonances_{sweep}.png"
+    )
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    log.info("wrote %s", out_path)
+    if show:
+        plt.show()
+    plt.close(fig)
+    return out_path
+
+
 def _demo() -> None:
     """Self-check: the envelope keeps the peak-to-peak of a dense sine."""
     t = np.linspace(0, 1, 1_000_000)

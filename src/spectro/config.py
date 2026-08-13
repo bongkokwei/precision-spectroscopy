@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
 C_M_S = 299_792_458.0
@@ -47,6 +48,20 @@ def chirp_hz_per_s(cfg: dict) -> float:
 def fringe_rate_hz(cfg: dict) -> float:
     """Expected MZI fringe frequency: f_fringe = (dnu/dt) / FSR."""
     return chirp_hz_per_s(cfg) / float(cfg["process"]["mzi_fsr_hz"])
+
+
+def nominal_lambda_nm(t_s, cfg: dict):
+    """Wavelength the laser is nominally at, t seconds after the trigger.
+
+    The dial reading, not a measurement: it assumes the ramp starts exactly at
+    start_nm and holds speed_nm_s exactly. On the 20260813 record it lands
+    within ~20 pm of the gas-cell lines over the whole 100 nm, which is far
+    finer than the ~400 pm line spacing and so plenty to identify lines by --
+    but ~20000x coarser than the catalogue, so it is never an anchor itself.
+    """
+    laser = cfg["laser"]
+    direction = 1.0 if laser["stop_nm"] >= laser["start_nm"] else -1.0
+    return laser["start_nm"] + direction * laser["speed_nm_s"] * np.asarray(t_s, float)
 
 
 def gas_lines_nm(cfg: dict) -> dict[str, dict[str, float]]:
