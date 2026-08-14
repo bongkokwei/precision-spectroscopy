@@ -260,8 +260,10 @@ def gas_anchors(
     Returns:
         One dict per identified line, in sweep order, holding: species, label,
         lambda_nm and nu_hz (both from the catalogue -- these are the reference
-        values, not measurements), phi_rad, depth, and residual_pm, the nominal
-        wavelength minus the catalogue one.
+        values, not measurements), nominal_lambda_nm (the dip's own measured
+        position on the dial's wavelength axis -- use this, not lambda_nm, to
+        place a marker on a trace plotted against nominal wavelength), phi_rad,
+        depth, and residual_pm, the nominal wavelength minus the catalogue one.
     """
     from .plot import load_h5
     from .sweeps import sweep_slices
@@ -298,6 +300,7 @@ def gas_anchors(
             "label": line[1],
             "lambda_nm": line[2],
             "nu_hz": C_M_S / (line[2] * 1e-9),
+            "nominal_lambda_nm": float(measured),
             "phi_rad": float(p),
             "depth": float(d),
             "residual_pm": float((measured - line[2]) * 1e3),

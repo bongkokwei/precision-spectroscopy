@@ -1,9 +1,11 @@
 """Load a scan.h5 and plot the raw channels, one stacked panel per role.
 
-A full record is tens of millions of samples per channel, which matplotlib will
-not draw in reasonable time. Points are therefore reduced with a min/max
-envelope rather than plain striding: striding aliases the MZI fringes into a
-moire pattern, whereas the envelope keeps the visible amplitude honest.
+Traces are plotted at full resolution -- no pre-reduction -- so that with
+`show=True` matplotlib's normal interactive zoom/pan on the toolbar reveals
+the exact samples rather than a pre-decimated stand-in. A full record is
+tens of millions of samples per channel, so the first draw and save can take
+a while; if that becomes a problem, plot a single `sweep` instead of the
+whole record.
 """
 
 from __future__ import annotations
@@ -50,24 +52,9 @@ def load_h5(
     return t_s, traces, cfg
 
 
-def _envelope(t_s: np.ndarray, y: np.ndarray, max_points: int):
-    """Reduce to <= max_points by keeping the min and max of each bin."""
-    n_bins = max_points // 2
-    if len(y) <= max_points:
-        return t_s, y
-    trimmed = (len(y) // n_bins) * n_bins
-    yb = y[:trimmed].reshape(n_bins, -1)
-    tb = t_s[:trimmed].reshape(n_bins, -1)
-    # Interleave (min, max) per bin so the trace is drawn as one continuous line.
-    y_env = np.empty(2 * n_bins)
-    y_env[0::2], y_env[1::2] = yb.min(axis=1), yb.max(axis=1)
-    return np.repeat(tb.mean(axis=1), 2), y_env
-
-
 def plot_scan(
     h5_path: str | Path,
     out_path: str | Path | None = None,
-    max_points: int = 20_000,
     show: bool = False,
     sweep: int | None = None,
 ) -> Path:
@@ -78,8 +65,8 @@ def plot_scan(
         out_path: Where to write the figure. Defaults to scan.png beside the
             data, or scan_sweep_<n>.png when a single sweep is plotted, so a
             sweep never overwrites the full-record view.
-        max_points: Points drawn per channel after envelope reduction.
-        show: Open an interactive window as well as saving.
+        show: Open an interactive window as well as saving. Use the
+            toolbar's zoom/pan to inspect the full-resolution trace.
         sweep: Plot only this forward sweep, indexed from the trigger edges
             (negative indexes from the end). None plots the whole record,
             flyback included.
@@ -118,7 +105,7 @@ def plot_scan(
     axes = np.atleast_1d(axes)
 
     for ax, (role, y), colour in zip(axes, traces.items(), PALETTE):
-        ax.plot(*_envelope(t_s, y, max_points), lw=0.7, color=colour)
+        ax.plot(t_s, y, lw=0.7, color=colour)
         ax.set_ylabel(f"{role}\n(V)")
         ax.grid(True, alpha=0.25, lw=0.5)
         ax.margins(x=0.005)
@@ -176,8 +163,10 @@ def plot_phase(
     t_s, phi, mzi, cfg = ruler.sweep_phase(h5_path, sweep, bandpass_hz)
     fringes = phi / (2 * np.pi)
 
-    # phi is smooth and monotonic, so plain striding is safe here -- unlike the
-    # raw fringes, which alias and need the min/max envelope.
+    # phi is smooth and monotonic, so plain striding is safe here -- unlike
+    # the raw fringes/gascell/DUT traces plotted elsewhere in this module,
+    # which are left at full resolution instead and rely on the interactive
+    # window's zoom to inspect them, since striding would alias them.
     step = max(len(phi) // 20_000, 1)
     ts, fs_dec = t_s[::step], fringes[::step]
     line = np.polyval(np.polyfit(ts, fs_dec, 1), ts)
@@ -248,7 +237,6 @@ def plot_gas(
     sweep: int = 0,
     out_path: str | Path | None = None,
     show: bool = False,
-    max_points: int = 20_000,
     anchors: list[dict] | None = None,
     **kwargs,
 ) -> Path:
@@ -264,8 +252,8 @@ def plot_gas(
         h5_path: Path to scan.h5.
         sweep: Which forward sweep to use.
         out_path: Figure path; defaults to scan_gas_<sweep>.png beside the data.
-        show: Open an interactive window as well as saving.
-        max_points: Points drawn for the trace after envelope reduction.
+        show: Open an interactive window as well as saving. Use the
+            toolbar's zoom/pan to inspect the full-resolution trace.
         anchors: Result of a ruler.gas_anchors() call you have already made.
             Worth passing: recomputing them re-runs the Hilbert transform over
             the whole sweep.
@@ -297,11 +285,11 @@ def plot_gas(
     colour = dict(zip(species, PALETTE))
 
     fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-    axes[0].plot(*_envelope(lam, traces["gascell"][sl], max_points), lw=0.7, color="0.35")
+    axes[0].plot(lam, traces["gascell"][sl], lw=0.7, color="0.35")
     span = np.ptp(traces["gascell"][sl])
     for a in anchors:
         axes[0].plot(
-            a["lambda_nm"], np.max(traces["gascell"][sl]) + 0.03 * span,
+            a["nominal_lambda_nm"], np.max(traces["gascell"][sl]) + 0.03 * span,
             marker="v", ms=4, color=colour[a["species"]],
         )
     axes[0].set_ylabel("Gas cell\n(V)")
@@ -309,7 +297,7 @@ def plot_gas(
     for s in species:
         pts = [a for a in anchors if a["species"] == s]
         axes[1].plot(
-            [a["lambda_nm"] for a in pts], [a["residual_pm"] for a in pts],
+            [a["nominal_lambda_nm"] for a in pts], [a["residual_pm"] for a in pts],
             ls="none", marker="o", ms=4, color=colour[s], label=f"{s} ({len(pts)})",
         )
     axes[1].axhline(0.0, lw=0.8, color="0.6")
@@ -344,7 +332,6 @@ def plot_resonances(
     sweep: int = 0,
     out_path: str | Path | None = None,
     show: bool = False,
-    max_points: int = 20_000,
     freq_hz: np.ndarray | None = None,
     dut: np.ndarray | None = None,
     resonances: list[dict] | None = None,
@@ -361,8 +348,8 @@ def plot_resonances(
         sweep: Which forward sweep to use.
         out_path: Figure path; defaults to scan_resonances_<sweep>.png beside
             the data.
-        show: Open an interactive window as well as saving.
-        max_points: Points drawn for the trace after envelope reduction.
+        show: Open an interactive window as well as saving. Use the
+            toolbar's zoom/pan to inspect the full-resolution trace.
         freq_hz, dut, resonances: Result of a ruler.find_resonances() call you
             have already made. Worth passing all three: a full sweep is
             25 M samples per channel, so recomputing dut_spectrum a second
@@ -389,7 +376,7 @@ def plot_resonances(
 
     freq_thz = freq_hz / 1e12
     fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-    axes[0].plot(*_envelope(freq_thz, dut, max_points), lw=0.7, color=PALETTE[0])
+    axes[0].plot(freq_thz, dut, lw=0.7, color=PALETTE[0])
     span = np.ptp(dut)
     for r in resonances:
         axes[0].plot(
@@ -426,19 +413,3 @@ def plot_resonances(
         plt.show()
     plt.close(fig)
     return out_path
-
-
-def _demo() -> None:
-    """Self-check: the envelope keeps the peak-to-peak of a dense sine."""
-    t = np.linspace(0, 1, 1_000_000)
-    y = 3.0 * np.sin(2 * np.pi * 5000 * t)
-    _, y_env = _envelope(t, y, 20_000)
-    assert len(y_env) <= 20_000, len(y_env)
-    assert abs(np.ptp(y_env) - 6.0) < 0.01, np.ptp(y_env)
-    t_short, y_short = _envelope(t[:100], y[:100], 20_000)
-    assert len(y_short) == 100, "short records must pass through untouched"
-    print("ok")
-
-
-if __name__ == "__main__":
-    _demo()
