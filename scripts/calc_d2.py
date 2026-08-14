@@ -1,12 +1,14 @@
 """Compute D2 (second-order dispersion) from a ring's fitted resonances.
 
-Builds on `spectro.ruler.find_resonances`: assigns each resonance an integer
-mode number relative to a reference wavelength, fits a quadratic through
-frequency vs. mode number with iterative outlier rejection (so an avoided
-mode crossing does not bias the fit), and reports D1 (FSR) and D2 the same
-way Yang et al. 2025 (Turnkey Deterministic Soliton Crystal Generation) do:
-D2/2pi is the mu^2 coefficient of a polynomial fit through the integrated
-dispersion.
+Builds on `spectro.ruler.find_resonances`: drops resonances whose fit looks
+like a failure rather than a real feature (near-zero amplitude, typically a
+symptom of Q collapsing right at an avoided mode crossing), assigns each
+survivor an integer mode number relative to a reference wavelength, fits a
+quadratic through frequency vs. mode number with iterative outlier
+rejection (so the AMX itself doesn't bias the fit), and reports D1 (FSR)
+and D2 the same way Yang et al. 2025 (Turnkey Deterministic Soliton Crystal
+Generation) do: D2/2pi is the mu^2 coefficient of a polynomial fit through
+the integrated dispersion.
 
 Run `spectro fit <h5file> --sweep <n>` first -- this script reads back that
 fit rather than recomputing it, same as `spectro plot --resonances`.
@@ -29,6 +31,57 @@ from spectro import ruler
 C_M_S = 299_792_458.0
 
 log = logging.getLogger(__name__)
+
+
+def filter_resonances(resonances: list[dict], n_mad: float = 5.0) -> list[dict]:
+    """Drop resonances whose fit is likely a failure, not a real feature.
+
+    Right at an avoided mode crossing, Q drops sharply (Yang et al. 2025)
+    and the resonance can broaden and weaken enough that fit_resonances'
+    single-Lorentzian model can't constrain it: the fit converges on
+    something with amplitude near zero and a linewidth pinned near its
+    search window's edge, rather than failing outright (which
+    fit_resonances already handles by skipping). These pass through as
+    "resonances" that aren't, and land at essentially arbitrary frequencies
+    -- exactly what causes assign_mode_numbers to raise a collision.
+
+    Filtering on amplitude rather than frequency or fwhm because it's the
+    cleanest signal: on the 20260813 ring, five fit failures sat 50-600x
+    below the 120 real resonances' amplitude, a gap wide enough that a
+    linear-amplitude threshold would need to be tuned per scan. Rejection
+    is on log|amp_hz| instead, since the failures differ multiplicatively
+    from the bulk, not additively -- the same MAD-based pattern already
+    used in ruler.assign_lines and fit_dispersion, just in log space.
+
+    Args:
+        resonances: Output of ruler.find_resonances().
+        n_mad: Rejection threshold, in robust sigma of log|amp_hz|.
+
+    Returns:
+        resonances with the low-amplitude fit failures removed, in the same
+        order. Logs what was dropped and why, since a caller who expects a
+        specific resonance count should be able to see where any went.
+    """
+    if len(resonances) <= 1:
+        return list(resonances)
+
+    log_amp = np.log(np.abs([r["amp_hz"] for r in resonances]))
+    med = np.median(log_amp)
+    mad = np.median(np.abs(log_amp - med))
+    sigma = 1.4826 * mad if mad > 0 else np.std(log_amp)
+    keep = log_amp > med - n_mad * sigma  # one-sided: only the weak tail is a fit failure
+
+    dropped = [r for r, k in zip(resonances, keep) if not k]
+    if dropped:
+        log.info(
+            "dropped %d likely fit failure(s) (near-zero amplitude, probably an "
+            "avoided mode crossing broadening the resonance past this fit's reach): %s",
+            len(dropped),
+            ", ".join(
+                f"{C_M_S / r['f0_hz'] * 1e9:.3f} nm (amp={r['amp_hz']:+.5f})" for r in dropped
+            ),
+        )
+    return [r for r, k in zip(resonances, keep) if k]
 
 
 def assign_mode_numbers(f0_hz: np.ndarray, ref_nm: float = 1550.0) -> tuple[np.ndarray, int]:
@@ -268,9 +321,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--degree", type=int, default=2, help="fit polynomial degree")
     parser.add_argument(
         "--n-mad", type=float, default=5.0,
-        help="outlier rejection threshold, in robust sigma",
+        help="dispersion-fit outlier rejection threshold, in robust sigma",
     )
     parser.add_argument("--max-iter", type=int, default=5, help="rejection rounds")
+    parser.add_argument(
+        "--amp-n-mad", type=float, default=5.0,
+        help="pre-filter threshold for low-amplitude (likely failed) resonance "
+        "fits, in robust sigma of log|amp_hz|",
+    )
     parser.add_argument(
         "--expected-fwhm-hz", type=float, default=2.0e8,
         help="order-of-magnitude resonance linewidth guess, passed to find_resonances",
@@ -293,6 +351,10 @@ def main(argv: list[str] | None = None) -> int:
             f"no resonances fit for sweep {args.sweep}; check --expected-fwhm-hz"
         )
 
+    n_fit = len(resonances)
+    resonances = filter_resonances(resonances, n_mad=args.amp_n_mad)
+    n_failed = n_fit - len(resonances)
+
     f0_hz = np.array([r["f0_hz"] for r in resonances])
     mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=args.ref_nm)
     fit = fit_dispersion(
@@ -301,7 +363,10 @@ def main(argv: list[str] | None = None) -> int:
     amx = amx_candidates(mu, f0_hz, fit)
 
     n_kept = int(fit["kept"].sum())
-    print(f"{len(resonances)} resonance(s): {n_kept} used in fit, {len(amx)} excluded as AMX candidate(s)")
+    print(
+        f"{n_fit} resonance(s): {n_failed} dropped as low-amplitude fit failures, "
+        f"{n_kept} used in fit, {len(amx)} excluded as AMX candidate(s)"
+    )
     print(
         f"reference mode mu=0 at {f0_hz[ref_index] / 1e12:.6f} THz "
         f"({C_M_S / f0_hz[ref_index] * 1e9:.3f} nm)"

@@ -27,6 +27,50 @@ def synthetic_resonances(d1_hz, d2_hz, n=61, amx_mu=None, amx_shift_hz=0.0, seed
     return mu_true, f
 
 
+def synthetic_resonance_dicts(d1_hz, d2_hz, n=61, amp_hz=0.15, seed=0):
+    """Resonance dicts shaped like ruler.find_resonances()'s output."""
+    mu_true, f = synthetic_resonances(d1_hz, d2_hz, n=n, seed=seed)
+    rng = np.random.default_rng(seed)
+    return [
+        {
+            "f0_hz": float(fi),
+            "amp_hz": float(amp_hz * rng.uniform(0.7, 1.3)),
+            "fwhm_hz": 2e8,
+            "q": float(fi / 2e8),
+        }
+        for fi in f
+    ]
+
+
+def test_filter_resonances_drops_low_amplitude_fit_failures():
+    resonances = synthetic_resonance_dicts(d1_hz=100e9, d2_hz=760e3)
+    # A fit failure landing almost exactly between two real modes -- the
+    # scenario that made assign_mode_numbers collide on the real ring data.
+    bad = dict(resonances[10])
+    bad["f0_hz"] += 0.5 * 100e9
+    bad["amp_hz"] = 0.0005  # ~300x smaller than the real resonances
+    with_failure = resonances[:11] + [bad] + resonances[11:]
+
+    # Left in, mode assignment collides -- this is the bug being fixed.
+    f0_with_bad = np.array([r["f0_hz"] for r in with_failure])
+    with pytest.raises(ValueError, match="collide"):
+        calc_d2.assign_mode_numbers(f0_with_bad, ref_nm=1550.0)
+
+    filtered = calc_d2.filter_resonances(with_failure)
+    assert len(filtered) == len(resonances)
+    assert bad not in filtered
+
+    f0_filtered = np.array([r["f0_hz"] for r in filtered])
+    mu, _ = calc_d2.assign_mode_numbers(f0_filtered, ref_nm=1550.0)
+    assert len(mu) == len(filtered)
+
+
+def test_filter_resonances_keeps_everything_when_no_outliers():
+    resonances = synthetic_resonance_dicts(d1_hz=100e9, d2_hz=760e3)
+    filtered = calc_d2.filter_resonances(resonances)
+    assert len(filtered) == len(resonances)
+
+
 def test_assign_mode_numbers_recovers_known_spacing():
     mu_true, f = synthetic_resonances(d1_hz=100e9, d2_hz=760e3)
     mu, ref_index = calc_d2.assign_mode_numbers(f, ref_nm=1550.0)
