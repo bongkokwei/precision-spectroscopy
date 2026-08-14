@@ -11,8 +11,6 @@ from typing import Any
 import numpy as np
 import yaml
 
-C_M_S = 299_792_458.0
-
 log = logging.getLogger(__name__)
 
 
@@ -32,22 +30,6 @@ def sample_rate_hz(cfg: dict) -> float:
 def sweep_duration_s(cfg: dict) -> float:
     laser = cfg["laser"]
     return abs(laser["stop_nm"] - laser["start_nm"]) / laser["speed_nm_s"]
-
-
-def centre_wavelength_m(cfg: dict) -> float:
-    laser = cfg["laser"]
-    return 0.5 * (laser["start_nm"] + laser["stop_nm"]) * 1e-9
-
-
-def chirp_hz_per_s(cfg: dict) -> float:
-    """Optical frequency chirp rate: |dnu/dt| = v * c / lambda0**2."""
-    lam0 = centre_wavelength_m(cfg)
-    return cfg["laser"]["speed_nm_s"] * 1e-9 * C_M_S / lam0**2
-
-
-def fringe_rate_hz(cfg: dict) -> float:
-    """Expected MZI fringe frequency: f_fringe = (dnu/dt) / FSR."""
-    return chirp_hz_per_s(cfg) / float(cfg["process"]["mzi_fsr_hz"])
 
 
 def nominal_lambda_nm(t_s, cfg: dict):
@@ -81,15 +63,12 @@ def gas_lines_nm(cfg: dict) -> dict[str, dict[str, float]]:
     }
 
 
-def preflight(cfg: dict, min_oversampling: int = 10) -> None:
+def preflight(cfg: dict) -> None:
     """Raise before wasting a capture if the settings cannot produce good data.
 
-    Two failure modes are worth catching up front, because each costs a full
-    sweep plus a multi-gigabyte file to discover the slow way:
-
-    1. Record window shorter than the sweep -- the trace is truncated.
-    2. Sample rate too low to resolve the MZI fringes -- the phase unwrap
-       aliases and the frequency ruler is silently wrong.
+    One failure mode is worth catching up front, because it costs a full
+    sweep plus a multi-gigabyte file to discover the slow way: a record
+    window shorter than the sweep, which leaves the trace truncated.
     """
     missing = {"scope", "laser", "process", "run"} - set(cfg)
     if missing:
@@ -107,19 +86,9 @@ def preflight(cfg: dict, min_oversampling: int = 10) -> None:
             f"({sweep:.1f} s); the trace would be truncated"
         )
 
-    f_s = sample_rate_hz(cfg)
-    f_fringe = fringe_rate_hz(cfg)
-    if f_s < min_oversampling * f_fringe:
-        raise ValueError(
-            f"sample rate {f_s / 1e6:.2f} MS/s is under {min_oversampling}x the "
-            f"expected MZI fringe rate {f_fringe / 1e3:.1f} kHz. Raise "
-            f"scope.points, lower laser.speed_nm_s, or use a shorter delay line."
-        )
-
     log.info(
-        "preflight OK: sweep %.1f s in a %.1f s window, %.2f MS/s vs %.1f kHz "
-        "fringe rate (%.0fx oversampled)",
-        sweep, window, f_s / 1e6, f_fringe / 1e3, f_s / f_fringe,
+        "preflight OK: sweep %.1f s in a %.1f s window, %.2f MS/s",
+        sweep, window, sample_rate_hz(cfg) / 1e6,
     )
 
     # Warning, not an error: the ruler still works without an absolute anchor,

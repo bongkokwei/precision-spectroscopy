@@ -1,4 +1,4 @@
-"""Command-line entry point: `spectro run` and `spectro process`."""
+"""Command-line entry point for `spectro`."""
 
 from __future__ import annotations
 
@@ -18,10 +18,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p_check = sub.add_parser("check", help="validate a config without touching hardware")
     p_check.add_argument("config")
-
-    p_proc = sub.add_parser("process", help="build the frequency ruler for an existing scan")
-    p_proc.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
-    p_proc.add_argument("--points", type=int, default=None, help="output grid size")
 
     p_plot = sub.add_parser("plot", help="plot the raw channels of an existing scan")
     p_plot.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
@@ -66,8 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = config.load(args.config)
         print(
             f"OK  sweep {config.sweep_duration_s(cfg):.1f} s  |  "
-            f"{config.sample_rate_hz(cfg) / 1e6:.2f} MS/s  |  "
-            f"fringe rate {config.fringe_rate_hz(cfg) / 1e3:.1f} kHz"
+            f"{config.sample_rate_hz(cfg) / 1e6:.2f} MS/s"
         )
         return 0
 
@@ -124,17 +119,17 @@ def main(argv: list[str] | None = None) -> int:
         from . import plot
 
         # Acquire only. The raw record still holds the parked-laser regions at
-        # both ends, and how to trim them is not settled -- so `spectro process`
-        # stays a separate, explicit step rather than running on every capture.
-        # A raw plot is cheap and is the first thing you look at, so it runs here.
+        # both ends, and how to trim them is not settled -- so building the
+        # frequency ruler (`spectro fit`) stays a separate, explicit step
+        # rather than running on every capture. A raw plot is cheap and is
+        # the first thing you look at, so it runs here.
         cfg = config.load(args.config)
         h5_path = acquire.run(cfg, config_path=args.config)
         print(h5_path)
         print(plot.plot_scan(h5_path))
         return 0
 
-    ruler.process_file(args.h5file, n_points=args.points)
-    return 0
+    raise AssertionError(f"unhandled command: {args.cmd!r}")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,6 @@ from spectro.ruler import (
     nu_hz,
     phase_rad,
     read_ruler_fit,
-    relative_freq_hz,
     resample_uniform,
 )
 
@@ -34,6 +33,19 @@ TRIM = 0.02  # Hilbert transform rings at the record edges
 # length, and it will fail for reasons the real instrument never sees.
 CHIRP_LINEAR_HZ_S = 3.0e11
 CHIRP_QUAD_HZ_S2 = 2.0e12
+
+
+def _relative_freq_hz(mzi, fsr_hz, fs_hz, bandpass_hz=None):
+    """Phase scaled to Hz by a single fixed, constant FSR.
+
+    Local test helper, not production code: ruler.py no longer ships this
+    conversion (nothing in the package called it -- the gas-anchored fit in
+    fit_nu_phi is what actually builds an absolute frequency axis now). Kept
+    here because it is still the simplest way to check phase_rad's accuracy
+    in frequency units against a synthetic chirp.
+    """
+    phi = phase_rad(mzi, fs_hz, bandpass_hz)
+    return (phi - phi[0]) / (2.0 * np.pi) * float(fsr_hz)
 
 
 def synthetic_mzi(noise: float = 0.0, seed: int = 0):
@@ -65,7 +77,7 @@ def _spacing_error(nu_rec, nu_true):
 
 def test_recovers_nonlinear_chirp():
     _, signal, nu_true = synthetic_mzi()
-    err = _spacing_error(relative_freq_hz(signal, FSR_HZ, FS_HZ), nu_true)
+    err = _spacing_error(_relative_freq_hz(signal, FSR_HZ, FS_HZ), nu_true)
     assert err.max() < 1.0e3, f"worst error {err.max():.1f} Hz on a {nu_true[-1]:.3g} Hz span"
 
 
@@ -83,7 +95,7 @@ def test_noise_floor_scales_as_white_phase_noise(noise):
     rejects the noise component in quadrature with the carrier.
     """
     _, signal, nu_true = synthetic_mzi(noise=noise)
-    err = _spacing_error(relative_freq_hz(signal, FSR_HZ, FS_HZ), nu_true)
+    err = _spacing_error(_relative_freq_hz(signal, FSR_HZ, FS_HZ), nu_true)
     predicted = noise / (2.0 * np.pi) * FSR_HZ
     assert 0.4 < err.std() / predicted < 0.9, (
         f"jitter {err.std():.3g} Hz vs predicted {predicted:.3g} Hz"
@@ -93,7 +105,7 @@ def test_noise_floor_scales_as_white_phase_noise(noise):
 def test_is_monotonic():
     """A non-monotonic axis means a cycle slip; np.interp would silently lie."""
     _, signal, _ = synthetic_mzi()
-    nu_rec = _interior(relative_freq_hz(signal, FSR_HZ, FS_HZ))
+    nu_rec = _interior(_relative_freq_hz(signal, FSR_HZ, FS_HZ))
     assert np.all(np.diff(nu_rec) > 0)
 
 
@@ -107,7 +119,7 @@ def test_resonance_lands_at_the_right_frequency_end_to_end():
     idx = len(t) // 2
     dut = 1.0 - 0.9 * np.exp(-0.5 * ((np.arange(len(t)) - idx) / 20.0) ** 2)
 
-    nu_rec = relative_freq_hz(signal, FSR_HZ, FS_HZ)
+    nu_rec = _relative_freq_hz(signal, FSR_HZ, FS_HZ)
     offset = (_interior(nu_rec) - _interior(nu_true)).mean()  # gas cell's job
     grid, dut_uniform = resample_uniform(nu_rec - offset, dut, trim_frac=TRIM)
     recovered = grid[np.argmin(dut_uniform)]

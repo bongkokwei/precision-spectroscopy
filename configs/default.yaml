@@ -24,15 +24,6 @@ laser:
   output_path: "high"       # high | lowsse | both_high | both_low
 
 process:
-  # Measured free spectral range of the fibre MZI, in Hz.
-  # ponytail: only the legacy relative_freq_hz/frequency_axis_hz path still
-  # reads this. The gas-cell fit (steps 3-6) replaces it, because dispersion
-  # means there is no single FSR across a 100 nm sweep. Delete both when that
-  # path lands.
-  # Measured on the 20260813 record: 3.826 Mfringe over the 1500-1600 nm
-  # sweep. It drifts ~0.5% across that span, which is the whole reason for
-  # the change of approach -- at 3.8 Mfringe, 0.5% is tens of GHz.
-  mzi_fsr_hz: 3.28e6
   # [low, high] Hz band-pass applied before the Hilbert transform. Must
   # bracket the fringe rate over the whole sweep: the 20260813 record runs
   # 325-433 kHz, so this leaves ~1.5x margin either side. Not optional --

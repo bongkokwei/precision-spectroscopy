@@ -90,7 +90,7 @@ def write_h5(
 
 def run(cfg: dict, config_path: str | Path | None = None) -> Path:
     """Execute one sweep and return the path to the written HDF5 file."""
-    # Imported here so `spectro process` works without a VISA stack installed.
+    # Imported here so processing-only installs work without a VISA stack.
     from agilent_8164b import Agilent8164B
     from rigol_dho4204 import DHO4204
 
