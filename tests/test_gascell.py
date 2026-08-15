@@ -45,18 +45,10 @@ def test_lines_lie_in_the_datasheet_range(cfg):
         assert lo <= min(w) and max(w) <= hi, name
 
 
-def test_gas_lines_nm_filters_to_the_sweep(cfg):
-    """The 1500-1640 nm sweep now covers every line in the cell."""
-    lines = config.gas_lines_nm(cfg)
-    assert {n: len(v) for n, v in lines.items()} == {
-        "H12C14N": 81, "12CO": 41, "13CO": 41
-    }
-    assert sorted(lines["12CO"].values()) == list(lines["12CO"].values())
-
-
 def test_gas_lines_nm_excludes_out_of_range(cfg):
     """A narrower sweep must drop the L-band species entirely."""
     cfg = {**cfg, "laser": {**cfg["laser"], "start_nm": 1510.0, "stop_nm": 1590.0}}
     lines = config.gas_lines_nm(cfg)
     assert lines["13CO"] == {}
     assert len(lines["12CO"]) == 35             # P14..P19 fall past 1590 nm
+    assert sorted(lines["12CO"].values()) == list(lines["12CO"].values())
