@@ -39,21 +39,12 @@ def main(argv: list[str] | None = None) -> int:
         help="plot the DUT spectrum and fitted resonances for --sweep (steps 5-6); "
         "run `spectro fit` first",
     )
-    p_plot.add_argument(
-        "--expected-fwhm-hz", type=float, default=2.0e8,
-        help="order-of-magnitude resonance linewidth guess for --resonances (Hz)",
-    )
 
     p_fit = sub.add_parser(
         "fit", help="fit nu(phi) through the gas-cell anchors for one sweep (step 4)"
     )
     p_fit.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
     p_fit.add_argument("--sweep", type=int, default=0, help="which forward sweep (0-based)")
-    p_fit.add_argument("--degree", type=int, default=2, help="polynomial degree")
-    p_fit.add_argument(
-        "--max-j", type=int, default=20,
-        help="drop H12C14N anchors with |J| above this",
-    )
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
@@ -84,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.resonances:
             freq_hz, dut, resonances = ruler.find_resonances(
-                args.h5file, sweep=args.sweep or 0, expected_fwhm_hz=args.expected_fwhm_hz
+                args.h5file, sweep=args.sweep or 0
             )
             for r in resonances:
                 print(
@@ -104,9 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "fit":
-        fit = ruler.fit_ruler(
-            args.h5file, sweep=args.sweep, degree=args.degree, max_j=args.max_j
-        )
+        fit = ruler.fit_ruler(args.h5file, sweep=args.sweep)
         print(
             f"sweep {args.sweep}: degree {fit['degree']} fit, {fit['n_anchors']} anchor(s) "
             f"({fit['dropped_high_j']} dropped), {fit['rms_hz'] / 1e6:.1f} MHz RMS"

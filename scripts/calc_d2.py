@@ -15,7 +15,10 @@ fit rather than recomputing it, same as `spectro plot --resonances`.
 
 Usage:
     python scripts/calc_d2.py data/<run>/scan.h5
-    python scripts/calc_d2.py data/<run>/scan.h5 --sweep 0 --ref-nm 1550 --show
+    python scripts/calc_d2.py data/<run>/scan.h5 --sweep 0 --show
+
+The fit knobs come from process.dispersion in the scan's own config, so the
+run folder records what produced its D2.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from spectro import ruler
+from spectro import config, plot, ruler
 
 C_M_S = 299_792_458.0
 
@@ -313,26 +316,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "h5file", help="path to a scan.h5 (needs `spectro fit` run first)"
     )
+    # The fit knobs -- ref_nm, degree, n_mad, max_iter, amp_n_mad -- live in
+    # process.dispersion of the config the scan was taken with, so a run folder
+    # records what produced its numbers. Edit the config, not a flag.
     parser.add_argument("--sweep", type=int, default=0, help="which forward sweep")
-    parser.add_argument(
-        "--ref-nm", type=float, default=1550.0,
-        help="wavelength whose nearest resonance becomes mode 0",
-    )
-    parser.add_argument("--degree", type=int, default=2, help="fit polynomial degree")
-    parser.add_argument(
-        "--n-mad", type=float, default=5.0,
-        help="dispersion-fit outlier rejection threshold, in robust sigma",
-    )
-    parser.add_argument("--max-iter", type=int, default=5, help="rejection rounds")
-    parser.add_argument(
-        "--amp-n-mad", type=float, default=5.0,
-        help="pre-filter threshold for low-amplitude (likely failed) resonance "
-        "fits, in robust sigma of log|amp_hz|",
-    )
-    parser.add_argument(
-        "--expected-fwhm-hz", type=float, default=2.0e8,
-        help="order-of-magnitude resonance linewidth guess, passed to find_resonances",
-    )
     parser.add_argument(
         "--out", default=None,
         help="diagnostic plot path; defaults to <stem>_dispersion_<sweep>.png",
@@ -343,22 +330,24 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
 
     h5_path = Path(args.h5file)
-    _, _, resonances = ruler.find_resonances(
-        h5_path, sweep=args.sweep, expected_fwhm_hz=args.expected_fwhm_hz
-    )
+    _, _, cfg = plot.load_h5(h5_path, roles=())  # attrs only; no channel is read
+    p = config.params(cfg, "dispersion")
+
+    _, _, resonances = ruler.find_resonances(h5_path, sweep=args.sweep)
     if not resonances:
         raise ValueError(
-            f"no resonances fit for sweep {args.sweep}; check --expected-fwhm-hz"
+            f"no resonances fit for sweep {args.sweep}; check "
+            f"process.resonances.expected_fwhm_hz in the config"
         )
 
     n_fit = len(resonances)
-    resonances = filter_resonances(resonances, n_mad=args.amp_n_mad)
+    resonances = filter_resonances(resonances, n_mad=p["amp_n_mad"])
     n_failed = n_fit - len(resonances)
 
     f0_hz = np.array([r["f0_hz"] for r in resonances])
-    mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=args.ref_nm)
+    mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=p["ref_nm"])
     fit = fit_dispersion(
-        mu, f0_hz, degree=args.degree, n_mad=args.n_mad, max_iter=args.max_iter
+        mu, f0_hz, degree=p["degree"], n_mad=p["n_mad"], max_iter=p["max_iter"]
     )
     amx = amx_candidates(mu, f0_hz, fit)
 

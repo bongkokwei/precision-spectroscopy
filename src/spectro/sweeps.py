@@ -38,12 +38,7 @@ def rising_edges(trigger: np.ndarray, threshold: float | None = None) -> np.ndar
     return np.flatnonzero(~high[:-1] & high[1:]) + 1
 
 
-def sweep_slices(
-    t_s: np.ndarray,
-    trigger: np.ndarray,
-    cfg: dict,
-    threshold: float | None = None,
-) -> list[slice]:
+def sweep_slices(t_s: np.ndarray, trigger: np.ndarray, cfg: dict) -> list[slice]:
     """Return one slice per complete forward sweep in the record.
 
     A trailing sweep that runs past the end of the capture is dropped rather
@@ -53,15 +48,15 @@ def sweep_slices(
     Args:
         t_s: Time base from plot.load_h5.
         trigger: Trigger channel samples.
-        cfg: Loaded config, for the sweep duration.
-        threshold: Passed to rising_edges.
+        cfg: Loaded config, for the sweep duration and, as rising_edges'
+            threshold, process.sweeps.trigger_threshold.
 
     Returns:
         Slices into the sample axis, in acquisition order.
     """
     dt_s = float(t_s[1] - t_s[0])
     n = int(round(config.sweep_duration_s(cfg) / dt_s))
-    starts = rising_edges(trigger, threshold)
+    starts = rising_edges(trigger, config.params(cfg, "sweeps")["trigger_threshold"])
     out = [slice(int(s), int(s) + n) for s in starts if s + n <= len(trigger)]
     log.info(
         "%d trigger edge(s), %d complete sweep(s) of %d samples (%.1f s)",

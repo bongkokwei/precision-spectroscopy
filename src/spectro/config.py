@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,39 @@ def nominal_lambda_nm(t_s, cfg: dict):
     return laser["start_nm"] + direction * laser["speed_nm_s"] * np.asarray(t_s, float)
 
 
+# What each analysis step falls back to when process.<step> is absent -- i.e.
+# for a scan.h5 written before that block existed. These mirror default.yaml
+# and are checked against it by tests/test_config.py, so the config stays the
+# place you change a value and this stays the place old files land.
+DEFAULTS: dict[str, dict[str, Any]] = {
+    "sweeps": {"trigger_threshold": None},
+    "anchors": {"resolution_pm": 1.0, "snr": 20.0, "tol_nm": 0.1, "n_mad": 5.0},
+    "ruler": {"degree": 2, "max_j": 20, "max_j_species": "H12C14N"},
+    "spectrum": {"trim_frac": 0.02, "n_points": None},
+    "resonances": {
+        "expected_fwhm_hz": 2.0e8, "snr": 100.0,
+        "window_fwhm": 4.0, "window_gap_frac": 0.4,
+    },
+    "dispersion": {
+        "ref_nm": 1550.0, "degree": 2, "n_mad": 5.0, "max_iter": 5, "amp_n_mad": 5.0,
+    },
+}
+
+
+def params(cfg: dict, step: str) -> dict:
+    """Analysis knobs for one pipeline step: process.<step> over DEFAULTS.
+
+    The config is the only way to set these -- no CLI flag or caller argument
+    overrides them, so the knobs behind a number are always the ones written
+    down in the run folder. Tuning one on a whim means editing the config,
+    which is the point. The leaf functions (fit_nu_phi, fit_resonances, ...)
+    still take explicit arguments, for tests and interactive work.
+    """
+    if step not in DEFAULTS:
+        raise KeyError(f"unknown pipeline step {step!r}; expected one of {sorted(DEFAULTS)}")
+    return {**DEFAULTS[step], **(cfg.get("process", {}).get(step) or {})}
+
+
 def gas_lines_nm(cfg: dict) -> dict[str, dict[str, float]]:
     """Gas-cell reference lines that fall inside the laser sweep.
 
@@ -61,6 +95,22 @@ def gas_lines_nm(cfg: dict) -> dict[str, dict[str, float]]:
         ))
         for name, spec in cfg.get("gascell", {}).get("species", {}).items()
     }
+
+
+# Scientific notation that PyYAML hands back as a string: YAML 1.1 only reads a
+# float when it has both a decimal point and a signed exponent, so 2.0e5, 2e+5
+# and 1.0E5 all load as text and blow up as a TypeError deep inside a filter.
+_SCI_STRING = re.compile(r"^[-+]?[0-9]*\.?[0-9]+[eE][-+]?[0-9]+$")
+
+
+def _unparsed_numbers(node: Any, path: str = "") -> list[tuple[str, str]]:
+    """Config leaves that were meant as numbers but parsed as strings."""
+    if isinstance(node, dict):
+        return [kv for k, v in node.items()
+                for kv in _unparsed_numbers(v, f"{path}.{k}" if path else str(k))]
+    if isinstance(node, list):
+        return [kv for i, v in enumerate(node) for kv in _unparsed_numbers(v, f"{path}[{i}]")]
+    return [(path, node)] if isinstance(node, str) and _SCI_STRING.match(node) else []
 
 
 def preflight(cfg: dict) -> None:
@@ -84,6 +134,13 @@ def preflight(cfg: dict) -> None:
         raise ValueError(
             f"scope.duration_s ({window:.1f} s) is shorter than the sweep "
             f"({sweep:.1f} s); the trace would be truncated"
+        )
+
+    for name, value in _unparsed_numbers(cfg.get("process", {})):
+        raise ValueError(
+            f"process.{name} is the string {value!r}, not a number: YAML wants "
+            f"a decimal point and a signed exponent, so write it as 2.0e+5, "
+            f"not 2.0e5 or 2e+5"
         )
 
     log.info(

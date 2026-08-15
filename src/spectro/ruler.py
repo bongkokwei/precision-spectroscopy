@@ -238,9 +238,6 @@ def gas_anchors(
     h5_path: str | Path,
     sweep: int = 0,
     bandpass_hz: tuple[float, float] | None = None,
-    resolution_pm: float = 1.0,
-    snr: float = 20.0,
-    tol_nm: float = 0.1,
 ) -> list[dict]:
     """Gas-cell lines of one sweep, placed on the MZI phase axis (step 3).
 
@@ -252,10 +249,10 @@ def gas_anchors(
         h5_path: Path to scan.h5.
         sweep: Which forward sweep, indexed from the trigger edges.
         bandpass_hz: Overrides the file's band-pass, as in sweep_phase().
-        resolution_pm: Wavelength per sample after decimation. 1 pm matches the
-            catalogue's own ~0.7 pm accuracy; finer only buys noise.
-        snr: Dip detection threshold, in multiples of the trace noise.
-        tol_nm: Largest nominal-vs-catalogue disagreement accepted as a match.
+
+    Detection and matching are tuned by process.anchors in the config:
+    resolution_pm (wavelength per sample after decimation), snr (dip threshold)
+    and tol_nm/n_mad (how far a dip may sit from a catalogue line).
 
     Returns:
         One dict per identified line, in sweep order, holding: species, label,
@@ -279,13 +276,18 @@ def gas_anchors(
         cfg["process"]["bandpass_hz"] = list(bandpass_hz)
     phi = phase_rad(traces["mzi"][sl], 1.0 / dt_s, cfg["process"].get("bandpass_hz"))
 
+    knobs = config.params(cfg, "anchors")
+    resolution_pm = knobs["resolution_pm"]
+
     k = max(int(round(resolution_pm * 1e-3 / cfg["laser"]["speed_nm_s"] / dt_s)), 1)
     widths = [
         s.get("linewidth_pm", 16.0)
         for s in cfg.get("gascell", {}).get("species", {}).values()
     ]
     pos, depth = find_dips(
-        _decimate(traces["gascell"][sl], k), min(widths, default=16.0) / resolution_pm, snr
+        _decimate(traces["gascell"][sl], k),
+        min(widths, default=16.0) / resolution_pm,
+        knobs["snr"],
     )
 
     index = pos * k  # back to full-rate samples within the sweep
@@ -306,7 +308,8 @@ def gas_anchors(
             "residual_pm": float((measured - line[2]) * 1e3),
         }
         for line, measured, p, d in zip(
-            assign_lines(lam, cfg, tol_nm=tol_nm), lam, phi_at, depth
+            assign_lines(lam, cfg, tol_nm=knobs["tol_nm"], n_mad=knobs["n_mad"]),
+            lam, phi_at, depth,
         )
         if line is not None
     ]
@@ -328,7 +331,12 @@ def gas_anchors(
     return anchors
 
 
-def fit_nu_phi(anchors: list[dict], cfg: dict, degree: int = 2, max_j: int = 20) -> dict:
+def fit_nu_phi(
+    anchors: list[dict],
+    cfg: dict,
+    degree: int | None = None,
+    max_j: int | None = None,
+) -> dict:
     """Fit nu(phi) through gas-cell anchors (step 4).
 
     A weighted polynomial is the whole model -- degree 3-4 buy nothing over a
@@ -341,10 +349,13 @@ def fit_nu_phi(anchors: list[dict], cfg: dict, degree: int = 2, max_j: int = 20)
 
     Args:
         anchors: Output of gas_anchors().
-        cfg: Loaded config, for gascell.species.*.accuracy_pm.
-        degree: Polynomial degree.
-        max_j: H12C14N lines with |J| (the digits in the branch label) above
-            this are excluded from the fit.
+        cfg: Loaded config, for gascell.species.*.accuracy_pm and process.ruler.
+        degree: Polynomial degree; None takes process.ruler.degree. The
+            pipeline leaves both of these None -- they are here for tests and
+            interactive work, not for `spectro fit`, which reads the config so
+            that the run folder records what the fit was made with.
+        max_j: Lines of process.ruler.max_j_species with |J| (the digits in the
+            branch label) above this are excluded; None takes the config's.
 
     Returns:
         {"coeffs": [...], "domain": [lo, hi], "degree", "rms_hz", "n_anchors",
@@ -353,9 +364,13 @@ def fit_nu_phi(anchors: list[dict], cfg: dict, degree: int = 2, max_j: int = 20)
         numpy.polyfit/polyval on phi (order 1e6-1e7 rad here) is badly
         conditioned; recover the axis with nu_hz(phi_rad, fit).
     """
+    p = config.params(cfg, "ruler")
+    degree = p["degree"] if degree is None else degree
+    max_j = p["max_j"] if max_j is None else max_j
+
     kept = [
         a for a in anchors
-        if not (a["species"] == "H12C14N" and int(a["label"][1:]) > max_j)
+        if not (a["species"] == p["max_j_species"] and int(a["label"][1:]) > max_j)
     ]
     dropped = len(anchors) - len(kept)
     if len(kept) <= degree:
@@ -394,8 +409,6 @@ def fit_ruler(
     h5_path: str | Path,
     sweep: int = 0,
     bandpass_hz: tuple[float, float] | None = None,
-    degree: int = 2,
-    max_j: int = 20,
     anchors: list[dict] | None = None,
 ) -> dict:
     """Fit nu(phi) for one sweep and write it into the file (step 4).
@@ -406,28 +419,43 @@ def fit_ruler(
     to ruler/sweep_<n> so a multi-sweep record keeps one fit per sweep,
     matching how gas_anchors and sweep_phase already work per-sweep.
 
+    The knobs that produced the fit go into the same group, as params_yaml.
+    The file's own config_yaml cannot serve: it is frozen at acquisition time,
+    while these are chosen here, possibly days later and possibly more than
+    once. Read the group, not the config, to know what a fit was made with.
+
     Args:
         h5_path: Path to scan.h5.
         sweep: Which forward sweep, indexed from the trigger edges.
         bandpass_hz: Overrides the file's band-pass, as in gas_anchors().
-        degree: Polynomial degree for the fit.
-        max_j: H12C14N lines with |J| above this are dropped from the fit.
         anchors: Result of a gas_anchors() call already made, to skip
             recomputing it.
+
+    The fit itself is tuned by process.ruler in the config.
 
     Returns:
         The dict from fit_nu_phi().
     """
     import h5py
+    import yaml
 
     from .plot import load_h5
 
     h5_path = Path(h5_path)
+    anchors_supplied = anchors is not None
     if anchors is None:
         anchors = gas_anchors(h5_path, sweep, bandpass_hz=bandpass_hz)
     _, _, cfg = load_h5(h5_path, roles=())  # attrs only; no channel is read
 
-    fit = fit_nu_phi(anchors, cfg, degree=degree, max_j=max_j)
+    fit = fit_nu_phi(anchors, cfg)
+
+    used = {
+        "bandpass_hz": list(bandpass_hz) if bandpass_hz else cfg["process"].get("bandpass_hz"),
+        # Only true of the anchors this call made: ones handed in were built by
+        # the caller, under knobs this function never sees.
+        "anchors": "supplied by caller" if anchors_supplied else config.params(cfg, "anchors"),
+        "ruler": config.params(cfg, "ruler"),
+    }
 
     with h5py.File(h5_path, "r+") as f:
         grp = f.require_group(f"ruler/sweep_{sweep}")
@@ -437,6 +465,7 @@ def fit_ruler(
         grp.attrs["rms_hz"] = fit["rms_hz"]
         grp.attrs["n_anchors"] = fit["n_anchors"]
         grp.attrs["dropped_high_j"] = fit["dropped_high_j"]
+        grp.attrs["params_yaml"] = yaml.safe_dump(used, sort_keys=False)
 
     log.info(
         "sweep %d: nu(phi) fit degree %d, %d anchor(s) (%d dropped), %.0f MHz RMS",
@@ -449,9 +478,12 @@ def read_ruler_fit(h5_path: str | Path, sweep: int = 0) -> dict:
     """Read back a fit_ruler() result written into the file.
 
     Mirrors fit_ruler's write, so dut_spectrum() can use a fit made earlier
-    (by `spectro fit`) without recomputing gas_anchors + fit_nu_phi.
+    (by `spectro fit`) without recomputing gas_anchors + fit_nu_phi. "params"
+    is what that fit was actually made with, and is {} for a fit written before
+    fit_ruler recorded them.
     """
     import h5py
+    import yaml
 
     with h5py.File(h5_path, "r") as f:
         key = f"ruler/sweep_{sweep}"
@@ -465,6 +497,7 @@ def read_ruler_fit(h5_path: str | Path, sweep: int = 0) -> dict:
             "rms_hz": float(grp.attrs["rms_hz"]),
             "n_anchors": int(grp.attrs["n_anchors"]),
             "dropped_high_j": int(grp.attrs["dropped_high_j"]),
+            "params": yaml.safe_load(grp.attrs.get("params_yaml", "{}")),
         }
 
 
@@ -473,7 +506,6 @@ def dut_spectrum(
     sweep: int = 0,
     bandpass_hz: tuple[float, float] | None = None,
     fit: dict | None = None,
-    n_points: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict]:
     """Map the DUT trace onto absolute optical frequency (step 5).
 
@@ -490,7 +522,8 @@ def dut_spectrum(
         fit: A fit_nu_phi()/fit_ruler() result already in hand. Read from
             ruler/sweep_<n> in the file if not given -- run `spectro fit`
             first if that group does not exist yet.
-        n_points: Output grid size; defaults to the sweep's own sample count.
+
+    The output grid is set by process.spectrum in the config.
 
     Returns:
         (freq_hz, dut, fit): ascending frequency grid, DUT transmission on
@@ -515,8 +548,11 @@ def dut_spectrum(
     if fit is None:
         fit = read_ruler_fit(h5_path, sweep)
 
+    p = config.params(cfg, "spectrum")
     nu = nu_hz(phi, fit)
-    freq_hz, dut = resample_uniform(nu, traces["dut"][sl], n_points=n_points)
+    freq_hz, dut = resample_uniform(
+        nu, traces["dut"][sl], n_points=p["n_points"], trim_frac=p["trim_frac"]
+    )
     return freq_hz, dut, fit
 
 
@@ -549,6 +585,8 @@ def fit_resonances(
     dut: np.ndarray,
     expected_fwhm_hz: float = 2.0e8,
     snr: float = 100.0,
+    window_fwhm: float = 4.0,
+    window_gap_frac: float = 0.4,
 ) -> list[dict]:
     """Fit a Lorentzian to each resonance in a DUT spectrum (step 6).
 
@@ -571,6 +609,9 @@ def fit_resonances(
             higher than find_dips' default: this ring's resonances stand
             ~400x the sample noise, so a low threshold just finds every
             noise wiggle inside each resonance's own wings.
+        window_fwhm: Fit half-window, in expected FWHM.
+        window_gap_frac: Cap on that half-window, as a fraction of the
+            distance to the nearest other candidate.
 
     Returns:
         One dict per resonance that converged: f0_hz, fwhm_hz, q, amp_hz
@@ -588,8 +629,10 @@ def fit_resonances(
     if len(pos) == 0:
         return []
     spacing = np.diff(np.sort(pos))
-    typical_gap = float(np.median(spacing)) if len(spacing) else 4 * width_samples
-    half_window = max(int(min(4 * width_samples, 0.4 * typical_gap)), 3)
+    typical_gap = float(np.median(spacing)) if len(spacing) else window_fwhm * width_samples
+    half_window = max(
+        int(min(window_fwhm * width_samples, window_gap_frac * typical_gap)), 3
+    )
 
     baseline0 = float(np.median(dut))
     out = []
@@ -628,17 +671,22 @@ def fit_resonances(
 def find_resonances(
     h5_path: str | Path,
     sweep: int = 0,
-    expected_fwhm_hz: float = 2.0e8,
-    snr: float = 100.0,
     fit: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, list[dict]]:
     """DUT spectrum plus its fitted resonances, in one call (steps 5+6).
 
+    Detection and fitting are tuned by process.resonances in the config.
+
     Returns:
         (freq_hz, dut, resonances) -- see dut_spectrum() and fit_resonances().
     """
+    from .plot import load_h5
+
+    _, _, cfg = load_h5(h5_path, roles=())  # attrs only; no channel is read
+    p = config.params(cfg, "resonances")
+
     freq_hz, dut, _ = dut_spectrum(h5_path, sweep=sweep, fit=fit)
-    resonances = fit_resonances(freq_hz, dut, expected_fwhm_hz=expected_fwhm_hz, snr=snr)
+    resonances = fit_resonances(freq_hz, dut, **p)
     log.info("sweep %d: %d resonance(s) fit", sweep, len(resonances))
     return freq_hz, dut, resonances
 

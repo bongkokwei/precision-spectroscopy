@@ -24,11 +24,78 @@ laser:
   output_path: "high"       # high | lowsse | both_high | both_low
 
 process:
-  # [low, high] Hz band-pass applied before the Hilbert transform. Must
-  # bracket the fringe rate over the whole sweep: the 20260813 record runs
-  # 325-433 kHz, so this leaves ~1.5x margin either side. Not optional --
-  # without it the unwrapped phase of that record goes non-monotonic.
-  bandpass_hz: [2.0e5, 7.0e5]
+  # Every knob the analysis takes, so a run folder records the numbers and not
+  # just the hardware settings. Defaults here are what the code used to carry
+  # in its signatures; a file written before this section existed still loads,
+  # the functions fall back to the same values.
+  #
+  # These are chosen *after* the capture, unlike the sections above, so the
+  # copy frozen into scan.h5 is the acquisition-time guess, not necessarily
+  # what a later `spectro fit` ran with. What was actually used is recorded in
+  # the ruler/sweep_<n> group of the file it produced.
+
+  # Step 2: MZI phase. [low, high] Hz band-pass applied before the Hilbert
+  # transform. Must bracket the fringe rate over the whole sweep: the 20260813
+  # record runs 325-433 kHz, so this leaves ~1.5x margin either side. Not
+  # optional -- without it the unwrapped phase of that record goes
+  # non-monotonic.
+  # Exponents need the sign (2.0e+5, not 2.0e5): YAML 1.1 parses the unsigned
+  # form as a string, and preflight rejects it.
+  bandpass_hz: [2.0e+5, 7.0e+5]
+
+  # Cutting the record into forward sweeps.
+  sweeps:
+    trigger_threshold: null   # null = midpoint of the trigger trace
+
+  # Step 3: gas-cell anchors.
+  anchors:
+    resolution_pm: 1.0        # wavelength per sample after decimation; matches
+                              # the catalogue's own ~0.7 pm accuracy, finer
+                              # only buys noise
+    snr: 20.0                 # dip threshold, in multiples of trace noise
+    tol_nm: 0.1               # largest nominal-vs-catalogue disagreement taken
+                              # as a match; the dial is good to ~20 pm and the
+                              # lines are ~400 pm apart
+    n_mad: 5.0                # second pass: robust sigma from the residual
+                              # cluster beyond which a match was coincidence
+
+  # Step 4: the nu(phi) fit.
+  ruler:
+    degree: 2                 # 3-4 buy nothing over a quadratic: measured
+                              # 88.9-89.6 MHz RMS vs 90.2, the catalogue's own
+                              # accuracy
+    max_j: 20                 # drop max_j_species lines above this |J|
+    max_j_species: "H12C14N"  # only this catalogue's error doubles with |J|
+                              # (SRM 2519a cross-check); null disables the cut
+
+  # Step 5: the DUT on an absolute frequency axis.
+  spectrum:
+    trim_frac: 0.02           # discarded from each end before interpolating,
+                              # to drop the Hilbert transform's edge artefacts
+    n_points: null            # output grid size; null = the sweep's own count
+
+  # Step 6: resonance fits.
+  resonances:
+    expected_fwhm_hz: 2.0e+8  # order of magnitude only, the real linewidth
+                              # comes out of the fit. 200 MHz matches the
+                              # 20260813 ring (185-266 MHz over 125 modes)
+    snr: 100.0                # much higher than anchors.snr: this ring's
+                              # resonances stand ~400x the sample noise, so a
+                              # low threshold finds noise inside their wings
+    window_fwhm: 4.0          # fit half-window = this many expected FWHM ...
+    window_gap_frac: 0.4      # ... capped at this fraction of the distance to
+                              # the nearest other candidate, so one fit never
+                              # eats a neighbour's wing
+
+  # Dispersion (scripts/calc_d2.py).
+  dispersion:
+    ref_nm: 1550.0            # wavelength of mode mu = 0
+    degree: 2
+    n_mad: 5.0                # fit-residual rejection; the rejects are the
+                              # avoided-mode-crossing candidates
+    max_iter: 5               # rejection rounds
+    amp_n_mad: 5.0            # low-amplitude fit-failure rejection, before
+                              # mode numbers are assigned
 
 gascell:
   # Wavelength References tri-gas cell, 80 cm multi-pass (H(80) housing).
