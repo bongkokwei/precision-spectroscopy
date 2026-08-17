@@ -6,10 +6,13 @@ quadratic in time. If the ruler only worked for a perfectly linear sweep it
 would be useless on real hardware.
 """
 
+import logging
+
 import h5py
 import numpy as np
 import pytest
 
+from spectro import ruler
 from spectro.ruler import (
     assign_lines,
     find_dips,
@@ -382,3 +385,129 @@ def test_fit_resonances_returns_empty_on_pure_noise():
     freq_hz = np.arange(190.0e12, 191.0e12, 2.0e6)
     dut = -58.1 + 2.0e-4 * rng.standard_normal(len(freq_hz))
     assert fit_resonances(freq_hz, dut, expected_fwhm_hz=FWHM_TEST_HZ, snr=20.0) == []
+
+
+# --- step 2b: measuring the fringe rate, and deriving the band from it -------
+#
+# A second chirp, sampled and swept like the real instrument rather than like
+# the fast synthetic one above: 2.5 MS/s, 325-433 kHz over a second. The
+# numbers matter here in a way they do not elsewhere in this file, because the
+# whole point of the auto band is that it lands somewhere specific.
+
+REAL_FS_HZ = 2.5e6
+REAL_DURATION_S = 1.0
+REAL_F0_HZ, REAL_F1_HZ = 325.0e3, 433.0e3
+REAL_KNOBS = {
+    "nperseg": 32768,
+    "search_hz": [5.0e4, 1.2e6],
+    "margin": 0.25,
+    "pctile": 1.0,
+}
+# The fast chirp at the top of this file spans 7.3-17.1 kHz, so it needs its own
+# search window -- and, being a 2.3x span, it is also the case where 2f cannot
+# be excluded.
+WIDE_KNOBS = {**REAL_KNOBS, "nperseg": 4096, "search_hz": [2.0e3, 3.0e4]}
+
+
+def realistic_chirp(harmonic: float = 0.0, drift: float = 0.0, seed: int = 0):
+    """(t, trace, true_fringe_rate_hz) for a linear chirp at instrument scale."""
+    t = np.arange(0.0, REAL_DURATION_S, 1.0 / REAL_FS_HZ)
+    rate_hz_s = (REAL_F1_HZ - REAL_F0_HZ) / REAL_DURATION_S
+    phase = 2.0 * np.pi * (REAL_F0_HZ * t + 0.5 * rate_hz_s * t**2)
+    trace = np.cos(phase)
+    if harmonic:
+        trace = trace + harmonic * np.cos(2.0 * phase)
+    if drift:
+        trace = trace + drift * np.sin(2.0 * np.pi * 3.0 * t)
+    trace = trace + 0.01 * np.random.default_rng(seed).standard_normal(len(t))
+    return t, trace, REAL_F0_HZ + rate_hz_s * t
+
+
+def test_fringe_rate_tracks_a_chirp():
+    t, trace, true_rate = realistic_chirp()
+    t_seg, rate = ruler.fringe_rate_hz(
+        trace, REAL_FS_HZ, REAL_KNOBS["nperseg"], tuple(REAL_KNOBS["search_hz"])
+    )
+    expected = np.interp(t_seg, t, true_rate)
+    assert np.abs(rate - expected).max() < 2.0e3
+
+
+def test_fringe_rate_ignores_drift_and_the_second_harmonic():
+    """The measurement has to survive exactly what it is meant to diagnose.
+
+    Drift near DC is stronger than the fringe on a real trace, and detector
+    nonlinearity puts a tone at 2f. Neither may capture the ridge, or the band
+    derived from it would be nonsense on precisely the records that need it.
+    """
+    _, clean, _ = realistic_chirp()
+    _, dirty, _ = realistic_chirp(harmonic=0.3, drift=5.0)
+    args = (REAL_FS_HZ, REAL_KNOBS["nperseg"], tuple(REAL_KNOBS["search_hz"]))
+    _, rate_clean = ruler.fringe_rate_hz(clean, *args)
+    _, rate_dirty = ruler.fringe_rate_hz(dirty, *args)
+    assert np.array_equal(rate_clean, rate_dirty)
+
+
+def test_auto_band_brackets_the_fringes_and_excludes_the_harmonic():
+    _, trace, _ = realistic_chirp(harmonic=0.3, drift=5.0)
+    low, high = ruler.resolve_band_hz(trace, REAL_FS_HZ, REAL_KNOBS)
+
+    assert low < REAL_F0_HZ and high > REAL_F1_HZ, "band must cover the fringes"
+    assert high < 2.0 * REAL_F0_HZ, "band must exclude the slowest fringe's 2f"
+    # The band this record has been analysed with until now runs to 700 kHz,
+    # which is above 2*325 kHz -- the case this whole mechanism exists to stop.
+    assert high < 700.0e3
+
+
+def test_auto_band_keeps_the_fringes_when_the_harmonic_cannot_be_excluded(caplog):
+    """A chirp wider than ~1.7:1 overlaps its own second harmonic.
+
+    No band can hold the fundamental and drop 2f, so covering the fringes has
+    to win -- silently clipping the top of the sweep would be far worse than
+    passing a harmonic.
+    """
+    _, signal, _ = synthetic_mzi()
+    with caplog.at_level(logging.WARNING):
+        low, high = ruler.resolve_band_hz(signal, FS_HZ, WIDE_KNOBS)
+    assert low < 7.3e3 and high > 17.1e3
+    assert "second harmonic" in caplog.text
+
+
+def test_auto_band_survives_the_drift_that_breaks_the_raw_phase():
+    """End to end: measure, derive, filter, and get a monotonic phase out."""
+    t, signal, nu_true = synthetic_mzi()
+    drifted = signal + 3.0 * np.sin(2.0 * np.pi * 20.0 * t)
+    band = ruler.resolve_band_hz(drifted, FS_HZ, WIDE_KNOBS)
+    phi = phase_rad(drifted, FS_HZ, band)
+    assert np.all(np.diff(_interior(phi)) > 0)
+    err = _spacing_error(phi, 2.0 * np.pi * nu_true / FSR_HZ)
+    assert err.max() < 0.05, f"worst phase error {err.max():.4f} rad"
+
+
+def test_band_for_accepts_the_three_config_forms():
+    _, trace, _ = realistic_chirp()
+    base = {"process": {"fringe_rate": REAL_KNOBS}}
+
+    explicit = {"process": {**base["process"], "bandpass_hz": [2.0e5, 7.0e5]}}
+    assert ruler.band_for(explicit, trace, REAL_FS_HZ) == (2.0e5, 7.0e5)
+
+    nofilter = {"process": {**base["process"], "bandpass_hz": None}}
+    assert ruler.band_for(nofilter, trace, REAL_FS_HZ) is None
+
+    auto = {"process": {**base["process"], "bandpass_hz": "auto"}}
+    band = ruler.band_for(auto, trace, REAL_FS_HZ)
+    assert band[0] < REAL_F0_HZ < REAL_F1_HZ < band[1]
+    # Resolved back into the config, so whatever reports what it ran with --
+    # plot titles, fit_ruler's params_yaml -- writes numbers, not "auto".
+    assert auto["process"]["bandpass_hz"] == list(band)
+
+
+def test_band_for_lets_a_caller_override_auto():
+    _, trace, _ = realistic_chirp()
+    cfg = {"process": {"bandpass_hz": "auto", "fringe_rate": REAL_KNOBS}}
+    assert ruler.band_for(cfg, trace, REAL_FS_HZ, (1.0e5, 6.0e5)) == (1.0e5, 6.0e5)
+
+
+def test_band_for_rejects_a_word_that_is_not_auto():
+    cfg = {"process": {"bandpass_hz": "wide"}}
+    with pytest.raises(ValueError, match="auto"):
+        ruler.band_for(cfg, np.zeros(1024), REAL_FS_HZ)

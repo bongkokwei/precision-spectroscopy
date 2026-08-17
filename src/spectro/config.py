@@ -53,6 +53,12 @@ def nominal_lambda_nm(t_s, cfg: dict):
 # place you change a value and this stays the place old files land.
 DEFAULTS: dict[str, dict[str, Any]] = {
     "sweeps": {"trigger_threshold": None},
+    "fringe_rate": {
+        "nperseg": 32768,
+        "search_hz": [5.0e4, 1.2e6],
+        "margin": 0.25,
+        "pctile": 1.0,
+    },
     "anchors": {"resolution_pm": 1.0, "snr": 20.0, "tol_nm": 0.1, "n_mad": 5.0},
     "ruler": {"degree": 2, "max_j": 20, "max_j_species": "H12C14N"},
     "spectrum": {"trim_frac": 0.02, "n_points": None},

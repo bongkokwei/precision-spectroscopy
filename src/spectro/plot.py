@@ -134,11 +134,19 @@ def plot_phase(
 ) -> Path:
     """Diagnostic plot of the MZI phase for one forward sweep.
 
-    Four panels, top to bottom: a few fringes of the band-passed trace with
+    Five panels, top to bottom: a few fringes of the band-passed trace with
     cos(phi) laid over them, which is the check that the phase actually tracks
     the fringes; total fringes phi/2pi; the departure of phi from a straight
-    line, which is the laser's sweep nonlinearity; and the instantaneous fringe
-    rate, which is proportional to the tuning rate.
+    line, which is the laser's sweep nonlinearity; the instantaneous fringe
+    rate, which is proportional to the tuning rate; and a spectrogram of the
+    raw MZI trace with the band-pass edges drawn on it.
+
+    The last two are the pair worth reading together. The fringe-rate panel is
+    differentiated from the filtered phase, so it can only ever show something
+    inside the band -- it cannot tell you the band is wrong. The spectrogram
+    never sees the filter, so it can. Its ridge is repeated on the fringe-rate
+    panel for exactly that comparison: where the two part company, the filter
+    moved the answer.
 
     Args:
         h5_path: Path to scan.h5.
@@ -157,11 +165,24 @@ def plot_phase(
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from . import ruler
+    from . import config, ruler
 
     h5_path = Path(h5_path)
     t_s, phi, mzi, cfg = ruler.sweep_phase(h5_path, sweep, bandpass_hz)
     fringes = phi / (2 * np.pi)
+    # Resolved by sweep_phase, so this is a pair of numbers even when the config
+    # asked for `auto`.
+    bp = cfg["process"].get("bandpass_hz")
+
+    # The one measurement here that does not depend on the band-pass: taken from
+    # the raw trace, so where it disagrees with dphi/dt below, the filter -- not
+    # the laser -- is what moved.
+    fs_hz = 1.0 / float(t_s[1] - t_s[0])
+    knobs = config.params(cfg, "fringe_rate")
+    f_hz, t_seg, spec = ruler.mzi_spectrogram(
+        mzi, fs_hz, knobs["nperseg"], tuple(knobs["search_hz"])
+    )
+    ridge_hz = f_hz[spec.argmax(axis=0)]
 
     # phi is smooth and monotonic, so plain striding is safe here -- unlike
     # the raw fringes/gascell/DUT traces plotted elsewhere in this module,
@@ -177,7 +198,7 @@ def plot_phase(
     n_zoom = int(zoom_fringes / (rate[len(rate) // 2] * (t_s[1] - t_s[0])))
     z = slice(mid, mid + n_zoom)
 
-    fig, axes = plt.subplots(4, 1, figsize=(12, 9))
+    fig, axes = plt.subplots(5, 1, figsize=(12, 11.5))
     ax = axes[0]
     x = mzi[z].astype(float)
     x = (x - x.mean()) / (0.5 * np.ptp(x))
@@ -200,18 +221,44 @@ def plot_phase(
     k = max(len(rate) // 50, 1)
     smooth = np.convolve(rate, np.ones(k) / k, mode="valid")
     axes[3].plot(
-        ts[k // 2 : k // 2 + len(smooth)], smooth / 1e3, lw=1.2, color=PALETTE[5]
+        ts[k // 2 : k // 2 + len(smooth)], smooth / 1e3, lw=1.2, color=PALETTE[5],
+        label=r"$\dot\phi/2\pi$ (post-filter)",
+    )
+    axes[3].plot(
+        t_seg, ridge_hz / 1e3, lw=1.0, ls=":", color=PALETTE[0],
+        label="spectrogram ridge (raw)",
     )
     axes[3].set_ylabel("Fringe rate\n(kHz)")
-    axes[3].set_xlabel("Time from trigger (s)")
+    axes[3].legend(loc="upper left", fontsize=8, frameon=False)
 
-    for a in axes:
+    # Bottom panel: where the fringe energy actually is. The band-pass edges are
+    # drawn on it because "does the ridge stay between the dashed lines over the
+    # whole sweep" is the entire question the band has to answer.
+    ax = axes[4]
+    with np.errstate(divide="ignore"):
+        db = 10.0 * np.log10(spec / spec.max())
+    mesh = ax.pcolormesh(
+        t_seg, f_hz / 1e3, db, vmin=-60.0, vmax=0.0, cmap="magma", shading="nearest"
+    )
+    if bp:
+        for edge in bp:
+            ax.axhline(edge / 1e3, lw=1.0, ls="--", color=PALETTE[2])
+    ax.set_ylabel("Spectrogram\n(kHz)")
+    ax.set_xlabel("Time from trigger (s)")
+    # Inset rather than fig.colorbar: a colourbar of its own would shrink this
+    # panel alone and knock the five time axes out of alignment.
+    cax = ax.inset_axes([0.80, 0.16, 0.18, 0.035])
+    fig.colorbar(mesh, cax=cax, orientation="horizontal")
+    cax.tick_params(labelsize=7, colors="white", length=2, pad=1)
+    cax.set_title("dB re peak", fontsize=7, color="white", pad=3)
+
+    for a in axes[:4]:  # not the spectrogram: a grid over a heatmap only hides it
         a.grid(True, alpha=0.25, lw=0.5)
+    for a in axes:
         a.margins(x=0.005)
         for side in ("top", "right"):
             a.spines[side].set_visible(False)
 
-    bp = cfg["process"].get("bandpass_hz")
     fig.suptitle(
         f"{h5_path.parent.name}  sweep {sweep}  "
         f"band-pass {bp[0] / 1e3:.0f}–{bp[1] / 1e3:.0f} kHz"

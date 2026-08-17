@@ -34,14 +34,34 @@ process:
   # what a later `spectro fit` ran with. What was actually used is recorded in
   # the ruler/sweep_<n> group of the file it produced.
 
-  # Step 2: MZI phase. [low, high] Hz band-pass applied before the Hilbert
-  # transform. Must bracket the fringe rate over the whole sweep: the 20260813
-  # record runs 325-433 kHz, so this leaves ~1.5x margin either side. Not
-  # optional -- without it the unwrapped phase of that record goes
-  # non-monotonic.
+  # Step 2: MZI phase. Band-pass applied before the Hilbert transform, and not
+  # optional -- without it the unwrapped phase goes non-monotonic, because
+  # low-frequency intensity drift drags the analytic signal off the origin and
+  # the phase then stops winding one way. Three accepted forms:
+  #   [low, high]  explicit Hz edges
+  #   auto         measure the fringe rate and derive the band (see below)
+  #   null         no filtering at all
   # Exponents need the sign (2.0e+5, not 2.0e5): YAML 1.1 parses the unsigned
   # form as a string, and preflight rejects it.
-  bandpass_hz: [2.0e+5, 7.0e+5]
+  bandpass_hz: auto
+
+  # How `auto` measures: a spectrogram of the *raw* MZI trace, strongest bin per
+  # segment. Raw on purpose -- the fringe rate read off the unwrapped phase is
+  # circular, since whatever the band-pass left is all there is left to measure,
+  # so it reports a rate inside the band however wrong the band is.
+  fringe_rate:
+    nperseg: 32768            # samples per segment: 13 ms at 2.5 MS/s, giving
+                              # 76 Hz resolution against ~140 Hz of chirp smear
+    search_hz: [5.0e+4, 1.2e+6]
+                              # where the fringe is looked for. The low edge is
+                              # what keeps the peak off the intensity drift near
+                              # DC, which is far stronger than the fringe itself
+    margin: 0.25              # band = measured range widened by this fraction,
+                              # then capped below the second harmonic of the
+                              # slowest fringe, and below Nyquist
+    pctile: 1.0               # percentile taken as the measured range instead of
+                              # min/max, so one segment that latched onto noise
+                              # cannot set an edge of the band by itself
 
   # Cutting the record into forward sweeps.
   sweeps:

@@ -61,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import plot
 
         if args.gas:
-            anchors = ruler.gas_anchors(args.h5file, sweep=args.sweep or 0)
+            anchors, _ = ruler.gas_anchors(args.h5file, sweep=args.sweep or 0)
             for a in anchors:
                 print(
                     f"{a['species']:>8} {a['label']:<4} {a['lambda_nm']:12.5f} nm  "
