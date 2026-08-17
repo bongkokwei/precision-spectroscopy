@@ -185,5 +185,5 @@ gascell:
 
 run:
   dir: "data"
-  dut_name: "ring01"
+  dut_name: "aux_ring_3"
   notes: ""
