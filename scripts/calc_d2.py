@@ -311,6 +311,55 @@ def plot_dispersion(
     return out_path
 
 
+def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
+    """D1, D2 and the mode assignment for one sweep (needs `spectro fit` first).
+
+    The body main() used to carry inline, lifted out so a batch caller can have
+    the numbers without going through argparse or re-reading printed output.
+
+    No band-pass argument, deliberately: ruler.dut_spectrum builds phi with the
+    band recorded in the ruler fit, so a record refitted under a different band
+    is already self-consistent by the time this sees it.
+
+    Args:
+        h5_path: Path to scan.h5.
+        sweep: Which forward sweep.
+
+    Returns:
+        The fit_dispersion() dict -- poly, kept, d1_hz, d2_hz, rms_hz -- plus
+        mu, f0_hz, ref_index, amx, and the n_fit/n_failed/n_kept counts.
+    """
+    h5_path = Path(h5_path)
+    _, _, cfg = plot.load_h5(h5_path, roles=())  # attrs only; no channel is read
+    p = config.params(cfg, "dispersion")
+
+    _, _, resonances = ruler.find_resonances(h5_path, sweep=sweep)
+    if not resonances:
+        raise ValueError(
+            f"no resonances fit for sweep {sweep}; check "
+            f"process.resonances.expected_fwhm_hz in the config"
+        )
+
+    n_fit = len(resonances)
+    resonances = filter_resonances(resonances, n_mad=p["amp_n_mad"])
+
+    f0_hz = np.array([r["f0_hz"] for r in resonances])
+    mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=p["ref_nm"])
+    fit = fit_dispersion(
+        mu, f0_hz, degree=p["degree"], n_mad=p["n_mad"], max_iter=p["max_iter"]
+    )
+    return {
+        **fit,
+        "mu": mu,
+        "f0_hz": f0_hz,
+        "ref_index": ref_index,
+        "amx": amx_candidates(mu, f0_hz, fit),
+        "n_fit": n_fit,
+        "n_failed": n_fit - len(resonances),
+        "n_kept": int(fit["kept"].sum()),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -330,48 +379,32 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
 
     h5_path = Path(args.h5file)
-    _, _, cfg = plot.load_h5(h5_path, roles=())  # attrs only; no channel is read
-    p = config.params(cfg, "dispersion")
+    d = dispersion_of(h5_path, args.sweep)
+    f0_ref = d["f0_hz"][d["ref_index"]]
 
-    _, _, resonances = ruler.find_resonances(h5_path, sweep=args.sweep)
-    if not resonances:
-        raise ValueError(
-            f"no resonances fit for sweep {args.sweep}; check "
-            f"process.resonances.expected_fwhm_hz in the config"
-        )
-
-    n_fit = len(resonances)
-    resonances = filter_resonances(resonances, n_mad=p["amp_n_mad"])
-    n_failed = n_fit - len(resonances)
-
-    f0_hz = np.array([r["f0_hz"] for r in resonances])
-    mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=p["ref_nm"])
-    fit = fit_dispersion(
-        mu, f0_hz, degree=p["degree"], n_mad=p["n_mad"], max_iter=p["max_iter"]
-    )
-    amx = amx_candidates(mu, f0_hz, fit)
-
-    n_kept = int(fit["kept"].sum())
     print(
-        f"{n_fit} resonance(s): {n_failed} dropped as low-amplitude fit failures, "
-        f"{n_kept} used in fit, {len(amx)} excluded as AMX candidate(s)"
+        f"{d['n_fit']} resonance(s): {d['n_failed']} dropped as low-amplitude fit "
+        f"failures, {d['n_kept']} used in fit, {len(d['amx'])} excluded as AMX "
+        "candidate(s)"
     )
     print(
-        f"reference mode mu=0 at {f0_hz[ref_index] / 1e12:.6f} THz "
-        f"({C_M_S / f0_hz[ref_index] * 1e9:.3f} nm)"
+        f"reference mode mu=0 at {f0_ref / 1e12:.6f} THz "
+        f"({C_M_S / f0_ref * 1e9:.3f} nm)"
     )
-    print(f"D1/2pi (FSR): {fit['d1_hz'] / 1e9:.4f} GHz")
-    print(f"D2/2pi:       {fit['d2_hz'] / 1e3:.1f} kHz/mu^2")
-    print(f"fit RMS:      {fit['rms_hz'] / 1e6:.2f} MHz on {n_kept} kept resonance(s)")
-    if amx:
+    print(f"D1/2pi (FSR): {d['d1_hz'] / 1e9:.4f} GHz")
+    print(f"D2/2pi:       {d['d2_hz'] / 1e3:.1f} kHz/mu^2")
+    print(
+        f"fit RMS:      {d['rms_hz'] / 1e6:.2f} MHz on {d['n_kept']} kept resonance(s)"
+    )
+    if d["amx"]:
         print("AMX candidates (mode, wavelength, deviation from fit):")
-        for a in amx:
+        for a in d["amx"]:
             print(f"  mu={a['mu']:+4d}  {a['lambda_nm']:10.4f} nm  {a['deviation_hz'] / 1e6:+8.2f} MHz")
 
     out_path = Path(args.out) if args.out else h5_path.with_name(
         f"{h5_path.stem}_dispersion_{args.sweep}.png"
     )
-    plot_dispersion(mu, f0_hz, fit, out_path, show=args.show)
+    plot_dispersion(d["mu"], d["f0_hz"], d, out_path, show=args.show)
     print(f"wrote {out_path}")
     return 0
 

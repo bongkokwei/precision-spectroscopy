@@ -112,3 +112,44 @@ def test_fit_dispersion_raises_when_too_few_survive():
     f = np.array([193.0e12, 193.1e12])
     with pytest.raises(ValueError, match="survive"):
         calc_d2.fit_dispersion(mu, f, degree=2)
+
+
+def test_dispersion_of_matches_the_inline_body_it_replaced(monkeypatch):
+    """The extraction has to be faithful, not just importable.
+
+    dispersion_of() is the code main() used to carry inline, lifted out so
+    refit_all can call it. Both halves are stubbed here -- the file read and
+    find_resonances -- so this checks the arithmetic between them, which is the
+    only part that moved.
+    """
+    d1_hz, d2_hz = 100.0e9, 760.0e3
+    resonances = synthetic_resonance_dicts(d1_hz=d1_hz, d2_hz=d2_hz, n=125)
+
+    monkeypatch.setattr(
+        calc_d2.plot, "load_h5", lambda *a, **k: (None, None, {"process": {}})
+    )
+    monkeypatch.setattr(
+        calc_d2.ruler, "find_resonances", lambda *a, **k: (None, None, resonances)
+    )
+
+    d = calc_d2.dispersion_of("nowhere/scan.h5", sweep=0)
+
+    assert abs(d["d1_hz"] - d1_hz) / d1_hz < 1e-4
+    assert abs(d["d2_hz"] - d2_hz) / d2_hz < 0.05
+    assert d["n_fit"] == 125
+    assert d["n_failed"] == 0
+    assert d["n_kept"] <= d["n_fit"]
+    # The keys main() and refit_all read off the result.
+    for key in ("poly", "kept", "rms_hz", "mu", "f0_hz", "ref_index", "amx"):
+        assert key in d, key
+
+
+def test_dispersion_of_raises_when_no_resonances_were_fit():
+    """Better a clear error than a D2 fitted through nothing."""
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(calc_d2.plot, "load_h5", lambda *a, **k: (None, None, {"process": {}}))
+        mp.setattr(calc_d2.ruler, "find_resonances", lambda *a, **k: (None, None, []))
+        with _pytest.raises(ValueError, match="no resonances"):
+            calc_d2.dispersion_of("nowhere/scan.h5")

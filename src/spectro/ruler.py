@@ -726,7 +726,9 @@ def dut_spectrum(
     Args:
         h5_path: Path to scan.h5.
         sweep: Which forward sweep (0-based).
-        bandpass_hz: Overrides the file's band-pass, as in sweep_phase().
+        bandpass_hz: Overrides the band recorded in the ruler fit, which is
+            what phi is built with by default. Rarely wanted: a band other than
+            the fit's own makes phi and nu(phi) disagree.
         fit: A fit_nu_phi()/fit_ruler() result already in hand. Read from
             ruler/sweep_<n> in the file if not given -- run `spectro fit`
             first if that group does not exist yet.
@@ -749,11 +751,18 @@ def dut_spectrum(
     sl = slices[sweep]
     dt_s = float(t_s[1] - t_s[0])
 
-    mzi = traces["mzi"][sl]
-    phi = phase_rad(mzi, 1.0 / dt_s, band_for(cfg, mzi, 1.0 / dt_s, bandpass_hz))
-
     if fit is None:
         fit = read_ruler_fit(h5_path, sweep)
+
+    # The band the fit was made with, not whichever one the config happens to
+    # hold. nu(phi) is only valid on the phi it was fitted against, so building
+    # phi under a different band shifts every resonance with nothing to show for
+    # it -- and the two disagree by default on any record refitted with an
+    # override. Only a fit read back from the file carries this; one handed in
+    # by a caller does not, and falls through to the config as it did before.
+    band = bandpass_hz or fit.get("params", {}).get("bandpass_hz")
+    mzi = traces["mzi"][sl]
+    phi = phase_rad(mzi, 1.0 / dt_s, band_for(cfg, mzi, 1.0 / dt_s, band))
 
     p = config.params(cfg, "spectrum")
     nu = nu_hz(phi, fit)
