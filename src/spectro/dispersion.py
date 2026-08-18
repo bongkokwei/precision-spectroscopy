@@ -14,8 +14,8 @@ Run `spectro fit <h5file> --sweep <n>` first -- this script reads back that
 fit rather than recomputing it, same as `spectro plot --resonances`.
 
 Usage:
-    python scripts/calc_d2.py data/<run>/scan.h5
-    python scripts/calc_d2.py data/<run>/scan.h5 --sweep 0 --show
+    spectro d2 data/<run>/scan.h5
+    spectro d2 data/<run>/scan.h5 --sweep 0 --show
 
 The fit knobs come from process.dispersion in the scan's own config, so the
 run folder records what produced its D2.
@@ -23,15 +23,13 @@ run folder records what produced its D2.
 
 from __future__ import annotations
 
-import argparse
 import logging
 from pathlib import Path
 
 import numpy as np
 
-from spectro import config, plot, ruler
-
-C_M_S = 299_792_458.0
+from . import config, plot, ruler
+from .ruler import C_M_S, _robust_sigma
 
 log = logging.getLogger(__name__)
 
@@ -69,11 +67,11 @@ def filter_resonances(resonances: list[dict], n_mad: float = 5.0) -> list[dict]:
         return list(resonances)
 
     log_amp = np.log(np.abs([r["amp_hz"] for r in resonances]))
-    med = np.median(log_amp)
-    mad = np.median(np.abs(log_amp - med))
-    sigma = 1.4826 * mad if mad > 0 else np.std(log_amp)
-    keep = log_amp > med - n_mad * sigma  # one-sided: only the weak tail is a fit failure
+    sigma = _robust_sigma(log_amp) or float(np.std(log_amp))
+    # One-sided: only the weak tail is a fit failure.
+    keep = log_amp > np.median(log_amp) - n_mad * sigma
 
+    kept = [r for r, k in zip(resonances, keep) if k]
     dropped = [r for r, k in zip(resonances, keep) if not k]
     if dropped:
         log.info(
@@ -84,7 +82,7 @@ def filter_resonances(resonances: list[dict], n_mad: float = 5.0) -> list[dict]:
                 f"{C_M_S / r['f0_hz'] * 1e9:.3f} nm (amp={r['amp_hz']:+.5f})" for r in dropped
             ),
         )
-    return [r for r, k in zip(resonances, keep) if k]
+    return kept
 
 
 def assign_mode_numbers(f0_hz: np.ndarray, ref_nm: float = 1550.0) -> tuple[np.ndarray, int]:
@@ -191,8 +189,7 @@ def fit_dispersion(
         poly = np.polynomial.Polynomial.fit(mu[kept], f0_hz[kept], degree)
         resid = f0_hz - poly(mu)
         med = np.median(resid[kept])
-        mad = np.median(np.abs(resid[kept] - med))
-        sigma = 1.4826 * mad if mad > 0 else np.std(resid[kept])
+        sigma = _robust_sigma(resid[kept]) or float(np.std(resid[kept]))
         new_kept = np.abs(resid - med) < n_mad * sigma
         if np.array_equal(new_kept, kept):
             break
@@ -360,26 +357,16 @@ def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
     }
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "h5file", help="path to a scan.h5 (needs `spectro fit` run first)"
-    )
-    # The fit knobs -- ref_nm, degree, n_mad, max_iter, amp_n_mad -- live in
-    # process.dispersion of the config the scan was taken with, so a run folder
-    # records what produced its numbers. Edit the config, not a flag.
-    parser.add_argument("--sweep", type=int, default=0, help="which forward sweep")
-    parser.add_argument(
-        "--out", default=None,
-        help="diagnostic plot path; defaults to <stem>_dispersion_<sweep>.png",
-    )
-    parser.add_argument("--show", action="store_true", help="open an interactive window")
-    args = parser.parse_args(argv)
+def run(h5file: str | Path, sweep: int = 0, out: str | Path | None = None,
+        show: bool = False) -> int:
+    """Print D1 and D2 for one sweep and write the D_int diagnostic plot.
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
-
-    h5_path = Path(args.h5file)
-    d = dispersion_of(h5_path, args.sweep)
+    The fit knobs -- ref_nm, degree, n_mad, max_iter, amp_n_mad -- live in
+    process.dispersion of the config the scan was taken with, so a run folder
+    records what produced its numbers. Edit the config, not a flag.
+    """
+    h5_path = Path(h5file)
+    d = dispersion_of(h5_path, sweep)
     f0_ref = d["f0_hz"][d["ref_index"]]
 
     print(
@@ -401,13 +388,9 @@ def main(argv: list[str] | None = None) -> int:
         for a in d["amx"]:
             print(f"  mu={a['mu']:+4d}  {a['lambda_nm']:10.4f} nm  {a['deviation_hz'] / 1e6:+8.2f} MHz")
 
-    out_path = Path(args.out) if args.out else h5_path.with_name(
-        f"{h5_path.stem}_dispersion_{args.sweep}.png"
+    out_path = Path(out) if out else h5_path.with_name(
+        f"{h5_path.stem}_dispersion_{sweep}.png"
     )
-    plot_dispersion(d["mu"], d["f0_hz"], d, out_path, show=args.show)
+    plot_dispersion(d["mu"], d["f0_hz"], d, out_path, show=show)
     print(f"wrote {out_path}")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

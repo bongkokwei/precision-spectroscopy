@@ -142,7 +142,8 @@ def preflight(cfg: dict) -> None:
             f"({sweep:.1f} s); the trace would be truncated"
         )
 
-    for name, value in _unparsed_numbers(cfg.get("process", {})):
+    if unparsed := _unparsed_numbers(cfg.get("process", {})):
+        name, value = unparsed[0]
         raise ValueError(
             f"process.{name} is the string {value!r}, not a number: YAML wants "
             f"a decimal point and a signed exponent, so write it as 2.0e+5, "

@@ -30,8 +30,12 @@ spectro plot data/<run>/scan.h5 --gas            # gas-cell line identification 
 spectro fit  data/<run>/scan.h5                  # fit nu(phi) through the gas-cell anchors,
                                                   # write it into the file (run this before --resonances)
 spectro plot data/<run>/scan.h5 --resonances     # DUT spectrum + fitted resonances
-spectro plot data/<run>/scan.h5 --resonances --expected-fwhm-hz 2e8  # override the linewidth guess
+spectro d2   data/<run>/scan.h5                  # ring dispersion: D1 (FSR), D2, AMX candidates
 ```
+
+Every analysis knob lives in `process.*` of the config the scan was taken
+with, never in a flag — so the run folder always records what produced a
+number.
 
 `run` acquires and stops. The raw record spans the whole capture window,
 including the parked-laser regions at each end where the MZI has no carrier,
@@ -43,40 +47,28 @@ Each run creates `data/<timestamp>_<dut_name>/` containing `scan.h5`,
 `run.log`, `screenshot.png` and a copy of the config that produced them.
 Nothing is encoded in filenames, so nothing can disagree with the data.
 
-### Running a scan from a script
-
-`spectro run` is a thin wrapper around two calls, so scripting your own
-acquisition (batching several DUTs, say) is just:
-
-```python
-from spectro import config
-from spectro.acquire import run
-
-cfg = config.load("configs/default.yaml")   # also runs the preflight checks
-h5_path = run(cfg, config_path="configs/default.yaml")
-print(f"wrote {h5_path}")
-```
-
-Save that as e.g. `scripts/run_scan.py` and run it with the environment
-`pip install -e ".[hw,dev]"` set up (`python scripts/run_scan.py`).
-
 ## How the frequency ruler is built
 
-Six steps, one forward sweep at a time:
+Five steps, one forward sweep at a time:
 
-1. Unwrap the analytic-signal phase for that sweep (`ruler.sweep_phase`).
-2. (same call as step 1 — the unwrap and the per-sweep windowing happen together).
-3. Detect the gas-cell absorption dips, identify each against the
+1. Cut the record at the trigger edges and unwrap the analytic-signal phase
+   of that sweep (`ruler._sweep_slice` + `ruler.band_for`, behind
+   `ruler.sweep_phase`).
+2. Detect the gas-cell absorption dips, identify each against the
    H12C14N / 12CO / 13CO catalogue in `configs/default.yaml`, and read off
    the MZI phase at each one (`ruler.gas_anchors`, `plot --gas`).
-4. Fit a weighted polynomial nu(phi) through those anchors — degree 2 by
+3. Fit a weighted polynomial nu(phi) through those anchors — degree 2 by
    default, CO weighted roughly 2x HCN by the catalogue's own accuracy — and
    write the coefficients into the file under `ruler/sweep_<n>`
    (`ruler.fit_ruler`, `spectro fit`).
-5. Map the DUT trace onto that absolute frequency axis using the stored fit
+4. Map the DUT trace onto that absolute frequency axis using the stored fit
    (`ruler.dut_spectrum`).
-6. Fit a Lorentzian to each resonance in the DUT spectrum
+5. Fit a Lorentzian to each resonance in the DUT spectrum
    (`ruler.fit_resonances`, `plot --resonances`).
+
+`spectro d2` then assigns each resonance a mode number and fits the
+integrated dispersion for D1 and D2 (`spectro.dispersion`), rejecting avoided
+mode crossings rather than letting them drag the parabola.
 
 `plot --resonances` reads back the fit `spectro fit` wrote rather than
 recomputing it, so run `fit` first — it errors with a clear message if you
@@ -99,8 +91,11 @@ latter sets each species' weight in the step-4 fit). Channels are addressed
 by *role* (`mzi`, `gascell`, `dut`, `trigger`), so processing never
 hardcodes a channel number.
 
-`process.bandpass_hz` is not optional: it must bracket the MZI fringe rate
-over the whole sweep, or the unwrapped phase goes non-monotonic.
+`process.bandpass_hz` must bracket the MZI fringe rate over the whole sweep,
+or the unwrapped phase goes non-monotonic. Write it as a `[low, high]` pair,
+or as `auto` to have `ruler.resolve_band_hz` measure the fringe rate off the
+trace and pick one. Whichever you use, the resolved numbers — never the word
+`auto` — are what get recorded in the fit's `params_yaml`.
 
 The sweep is always continuous and one-way. A two-way sweep gives a
 non-monotonic phase ramp, which would need splitting at the turning point
@@ -120,8 +115,10 @@ after a full sweep and a multi-gigabyte file.
 ```
 /raw/ch1..ch4     float32, LZF-compressed
 /ruler/sweep_<n>  attrs only -- coeffs_hz, domain_rad, degree, rms_hz,
-                  n_anchors, dropped_high_j (written by `spectro fit`, one
-                  group per fitted sweep)
+                  n_anchors, dropped_high_j, and params_yaml (the knobs the
+                  fit was made with, including the band-pass an `auto`
+                  resolved to). Written by `spectro fit`, one group per
+                  fitted sweep
 attrs             t0_s, dt_s, n_samples, timestamp, both *IDN? strings,
                   and the complete config as YAML
 ```

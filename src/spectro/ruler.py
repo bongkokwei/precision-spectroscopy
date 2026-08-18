@@ -19,15 +19,63 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+from scipy.constants import c as C_M_S
 from scipy.fft import next_fast_len
 from scipy.optimize import curve_fit
 from scipy.signal import butter, find_peaks, hilbert, sosfiltfilt, spectrogram
 
 from . import config
 
-C_M_S = 299_792_458.0
-
 log = logging.getLogger(__name__)
+
+
+def _noise(y: np.ndarray) -> float:
+    """Sample-to-sample noise, robust to whatever features sit on top of it.
+
+    A MAD of the first difference: blind to the dips and peaks themselves, and
+    to the slow baseline that a plain standard deviation would end up measuring
+    instead. Falls back to a fraction of the range for a quiet trace on a
+    coarse ADC, where every neighbour is identical and the MAD is zero.
+    """
+    noise = float(np.median(np.abs(np.diff(y))) * 1.4826 / np.sqrt(2.0))
+    return noise if noise > 0.0 else float(np.ptp(y)) * 1e-3
+
+
+def _robust_sigma(x: np.ndarray) -> float:
+    """MAD scaled to match a Gaussian sigma. Zero if over half of x is identical.
+
+    Outliers are rejected this way in three places -- gas-line assignment here,
+    and amplitude and fit-residual rejection in dispersion -- because in all
+    three the thing being rejected is exactly what would inflate a standard
+    deviation. What to do when this returns zero is the caller's: a floor where
+    one is known, std where the sample is small and clean.
+    """
+    return 1.4826 * float(np.median(np.abs(x - np.median(x))))
+
+
+def _sweep_slice(
+    h5_path: str | Path, sweep: int, roles: tuple[str, ...]
+) -> tuple[np.ndarray, dict[str, np.ndarray], slice, dict]:
+    """Load a scan file and pick one complete forward sweep out of it.
+
+    The shared preamble of sweep_phase, gas_anchors and dut_spectrum. The phase
+    itself is left to the caller: all three resolve their band-pass
+    differently -- dut_spectrum takes the band from the fit it is about to
+    apply, not from the config -- so band_for() stays at the call site where
+    that choice is visible.
+
+    Returns:
+        (t_s, traces, sl, cfg): the record's time base and traces, the slice
+        picking this sweep out of them, and the config as loaded.
+    """
+    from .plot import load_h5  # ponytail: I/O helper lives with the plotter
+    from .sweeps import sweep_slices
+
+    t_s, traces, cfg = load_h5(h5_path, roles=roles)
+    slices = sweep_slices(t_s, traces["trigger"], cfg)
+    if not slices:
+        raise ValueError("no complete forward sweep in this record")
+    return t_s, traces, slices[sweep], cfg
 
 
 def phase_rad(
@@ -301,15 +349,7 @@ def sweep_phase(
         caller can check the phase against the fringes it came from. Time is
         re-zeroed to the trigger edge.
     """
-    from .plot import load_h5  # ponytail: I/O helper lives with the plotter
-    from .sweeps import sweep_slices
-
-    t_s, traces, cfg = load_h5(h5_path, roles=("mzi", "trigger"))
-    slices = sweep_slices(t_s, traces.pop("trigger"), cfg)
-    if not slices:
-        raise ValueError("no complete forward sweep in this record")
-    sl = slices[sweep]
-
+    t_s, traces, sl, cfg = _sweep_slice(h5_path, sweep, ("mzi", "trigger"))
     fs_hz = 1.0 / float(t_s[1] - t_s[0])
     mzi = traces["mzi"][sl]
     phi = phase_rad(mzi, fs_hz, band_for(cfg, mzi, fs_hz, bandpass_hz))
@@ -355,11 +395,7 @@ def find_dips(
         was seen, not a photometric absorption depth.
     """
     y = np.asarray(y, dtype=float)
-    # Sample-to-sample MAD: robust to the dips themselves, and blind to the slow
-    # baseline that a plain standard deviation would end up measuring instead.
-    noise = float(np.median(np.abs(np.diff(y))) * 1.4826 / np.sqrt(2.0))
-    if noise <= 0.0:  # quiet trace on a coarse ADC: every neighbour identical
-        noise = float(np.ptp(y)) * 1e-3
+    noise = _noise(y)
     _, props = find_peaks(
         -y,
         prominence=snr * noise,
@@ -421,8 +457,8 @@ def assign_lines(
         # Floored at a hundredth of the tolerance -- about the catalogue's own
         # accuracy -- so that an unusually consistent set of matches does not
         # collapse the window onto itself and reject everything.
-        mad = max(np.median(np.abs(resid[ok] - med)) * 1.4826, 0.01 * tol_nm)
-        ok &= np.abs(resid - med) < n_mad * mad
+        sigma = max(_robust_sigma(resid[ok]), 0.01 * tol_nm)
+        ok &= np.abs(resid - med) < n_mad * sigma
 
     # Two dips can land on one line if tol_nm is loose. Keep the closer, rather
     # than hand step 4 two contradictory anchors for the same optical frequency.
@@ -466,15 +502,10 @@ def gas_anchors(
         fit_ruler can record the numbers behind an `auto` without measuring the
         fringe rate a second time.
     """
-    from .plot import load_h5
-    from .sweeps import sweep_slices
-
-    t_s, traces, cfg = load_h5(h5_path, roles=("mzi", "gascell", "trigger"))
-    slices = sweep_slices(t_s, traces["trigger"], cfg)
-    if not slices:
-        raise ValueError("no complete forward sweep in this record")
-    sl = slices[sweep]
+    roles = ("mzi", "gascell", "trigger")
+    t_s, traces, sl, cfg = _sweep_slice(h5_path, sweep, roles)
     dt_s = float(t_s[1] - t_s[0])
+    catalogue = config.gas_lines_nm(cfg)
 
     mzi = traces["mzi"][sl]
     band_hz = band_for(cfg, mzi, 1.0 / dt_s, bandpass_hz)
@@ -519,16 +550,16 @@ def gas_anchors(
     ]
 
     found = Counter(a["species"] for a in anchors)
-    available = {s: len(v) for s, v in config.gas_lines_nm(cfg).items()}
+    resid_pm = [a["residual_pm"] for a in anchors] or [0.0]
     log.info(
         "sweep %d: %d dip(s) -> %d anchor(s) [%s], dial error %+.0f pm over a "
         "%.0f pm spread",
         sweep,
         len(pos),
         len(anchors),
-        ", ".join(f"{s}: {found[s]}/{n}" for s, n in available.items()),
-        np.median([a["residual_pm"] for a in anchors]) if anchors else 0.0,
-        np.ptp([a["residual_pm"] for a in anchors]) if anchors else 0.0,
+        ", ".join(f"{s}: {found[s]}/{len(v)}" for s, v in catalogue.items()),
+        np.median(resid_pm),
+        np.ptp(resid_pm),
     )
     if not anchors:
         log.warning("no gas-cell line identified; nu(phi) cannot be anchored")
@@ -740,15 +771,8 @@ def dut_spectrum(
         it, and the fit used (so a caller can print rms_hz etc. without a
         second file read).
     """
-    from .plot import load_h5
-    from .sweeps import sweep_slices
-
     h5_path = Path(h5_path)
-    t_s, traces, cfg = load_h5(h5_path, roles=("mzi", "dut", "trigger"))
-    slices = sweep_slices(t_s, traces["trigger"], cfg)
-    if not slices:
-        raise ValueError("no complete forward sweep in this record")
-    sl = slices[sweep]
+    t_s, traces, sl, cfg = _sweep_slice(h5_path, sweep, ("mzi", "dut", "trigger"))
     dt_s = float(t_s[1] - t_s[0])
 
     if fit is None:
@@ -787,11 +811,9 @@ def _resonance_candidates(y: np.ndarray, width_samples: float, snr: float) -> np
     """
     y = np.asarray(y, dtype=float)
     baseline = float(np.median(y))
-    noise = float(np.median(np.abs(np.diff(y))) * 1.4826 / np.sqrt(2.0))
-    if noise <= 0.0:  # quiet trace on a coarse ADC: every neighbour identical
-        noise = float(np.ptp(y)) * 1e-3
     pos, _ = find_peaks(
-        np.abs(y - baseline), prominence=snr * noise, distance=max(int(2.0 * width_samples), 1)
+        np.abs(y - baseline), prominence=snr * _noise(y),
+        distance=max(int(2.0 * width_samples), 1),
     )
     return pos
 
@@ -908,7 +930,7 @@ def find_resonances(
 
 
 def resample_uniform(
-    nu_hz: np.ndarray,
+    nu: np.ndarray,
     y: np.ndarray,
     n_points: int | None = None,
     trim_frac: float = 0.02,
@@ -916,7 +938,7 @@ def resample_uniform(
     """Interpolate y from the (non-uniform) frequency axis onto a uniform grid.
 
     Args:
-        nu_hz: Per-sample optical frequency, e.g. from nu_hz() (the
+        nu: Per-sample optical frequency, e.g. from nu_hz() (the
             gas-anchored fit evaluated over a sweep's phase).
         y: Channel to resample, same length as nu_hz.
         n_points: Output grid size; defaults to the input length.
@@ -926,7 +948,7 @@ def resample_uniform(
     Returns:
         (uniform frequency grid, y interpolated onto it), both ascending.
     """
-    nu = np.asarray(nu_hz, dtype=float)
+    nu = np.asarray(nu, dtype=float)
     y = np.asarray(y, dtype=float)
     if nu.shape != y.shape:
         raise ValueError(f"length mismatch: nu {nu.shape} vs y {y.shape}")

@@ -46,8 +46,18 @@ def main(argv: list[str] | None = None) -> int:
     p_fit.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
     p_fit.add_argument("--sweep", type=int, default=0, help="which forward sweep (0-based)")
 
+    p_d2 = sub.add_parser("d2", help="fit the ring's dispersion, D1 and D2 (needs `fit` first)")
+    p_d2.add_argument("h5file", help="path to a scan.h5 written by `spectro run`")
+    p_d2.add_argument("--sweep", type=int, default=0, help="which forward sweep (0-based)")
+    p_d2.add_argument(
+        "--out", default=None,
+        help="diagnostic plot path; defaults to <stem>_dispersion_<sweep>.png",
+    )
+    p_d2.add_argument("--show", action="store_true", help="open an interactive window")
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s")
+    sweep = getattr(args, "sweep", None) or 0  # plot_scan alone wants the None
 
     if args.cmd == "check":
         cfg = config.load(args.config)
@@ -61,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import plot
 
         if args.gas:
-            anchors, _ = ruler.gas_anchors(args.h5file, sweep=args.sweep or 0)
+            anchors, _ = ruler.gas_anchors(args.h5file, sweep=sweep)
             for a in anchors:
                 print(
                     f"{a['species']:>8} {a['label']:<4} {a['lambda_nm']:12.5f} nm  "
@@ -70,12 +80,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 plot.plot_gas(
-                    args.h5file, sweep=args.sweep or 0, show=args.show, anchors=anchors
+                    args.h5file, sweep=sweep, show=args.show, anchors=anchors
                 )
             )
         elif args.resonances:
             freq_hz, dut, resonances = ruler.find_resonances(
-                args.h5file, sweep=args.sweep or 0
+                args.h5file, sweep=sweep
             )
             for r in resonances:
                 print(
@@ -84,20 +94,25 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 plot.plot_resonances(
-                    args.h5file, sweep=args.sweep or 0, show=args.show,
+                    args.h5file, sweep=sweep, show=args.show,
                     freq_hz=freq_hz, dut=dut, resonances=resonances,
                 )
             )
         elif args.phase:
-            print(plot.plot_phase(args.h5file, sweep=args.sweep or 0, show=args.show))
+            print(plot.plot_phase(args.h5file, sweep=sweep, show=args.show))
         else:
             print(plot.plot_scan(args.h5file, show=args.show, sweep=args.sweep))
         return 0
 
+    if args.cmd == "d2":
+        from . import dispersion
+
+        return dispersion.run(args.h5file, sweep=sweep, out=args.out, show=args.show)
+
     if args.cmd == "fit":
-        fit = ruler.fit_ruler(args.h5file, sweep=args.sweep)
+        fit = ruler.fit_ruler(args.h5file, sweep=sweep)
         print(
-            f"sweep {args.sweep}: degree {fit['degree']} fit, {fit['n_anchors']} anchor(s) "
+            f"sweep {sweep}: degree {fit['degree']} fit, {fit['n_anchors']} anchor(s) "
             f"({fit['dropped_high_j']} dropped), {fit['rms_hz'] / 1e6:.1f} MHz RMS"
         )
         print(f"coeffs (Hz, highest power first): {fit['coeffs']}")

@@ -70,15 +70,6 @@ def sweep_slices(t_s: np.ndarray, trigger: np.ndarray, cfg: dict) -> list[slice]
     return out
 
 
-def iter_sweeps(t_s, traces: dict[str, np.ndarray], cfg, trigger_role="trigger"):
-    """Yield (t_rel_s, {role: samples}) for each complete sweep.
-
-    The time base is re-zeroed to the trigger so sweeps overlay directly.
-    """
-    for sl in sweep_slices(t_s, traces[trigger_role], cfg):
-        yield t_s[sl] - t_s[sl.start], {k: v[sl] for k, v in traces.items()}
-
-
 def _demo() -> None:
     """Self-check against a synthetic record: 4 triggers, 5 sweeps of room."""
     cfg = {"laser": {"start_nm": 1500.0, "stop_nm": 1600.0, "speed_nm_s": 10.0}}
@@ -97,10 +88,6 @@ def _demo() -> None:
     assert len(sweep_slices(t_s[: 3 * n + 10], trig[: 3 * n + 10], cfg)) == 3
     # No trigger at all -> no sweeps, no exception.
     assert sweep_slices(t_s, np.zeros_like(t_s), cfg) == []
-
-    t_rel, seg = next(iter_sweeps(t_s, {"trigger": trig, "mzi": t_s.copy()}, cfg))
-    assert t_rel[0] == 0.0 and len(seg["mzi"]) == n
-    assert abs(t_rel[-1] - 9.999) < 1e-6, t_rel[-1]
     print("ok")
 
 

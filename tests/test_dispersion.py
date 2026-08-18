@@ -1,17 +1,13 @@
-"""Synthetic checks for the D2 fit in scripts/calc_d2.py.
+"""Synthetic checks for the D2 fit in spectro.dispersion.
 
 Follows the package's own convention (test_ruler.py): synthetic data with a
 known answer, not fixed thresholds on real data.
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import calc_d2  # noqa: E402
+from spectro import dispersion as calc_d2
 
 
 def synthetic_resonances(d1_hz, d2_hz, n=61, amx_mu=None, amx_shift_hz=0.0, seed=0):
