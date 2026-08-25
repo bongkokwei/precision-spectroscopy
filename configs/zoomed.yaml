@@ -15,10 +15,10 @@ laser:
   resource: "GPIB0::21::INSTR"
   slot: 0
   channel: 1
-  start_nm: 1500.0
-  stop_nm: 1600.0
+  start_nm: 1575.0
+  stop_nm: 1585.0
   cycles: 0
-  speed_nm_s: 10.0
+  speed_nm_s: 1.0
   power: 12.0
   power_unit: "dBm"         # dBm | mW | uW | nW
   output_path: "high"       # high | lowsse | both_high | both_low
@@ -41,7 +41,7 @@ process:
   # non-monotonic.
   # Exponents need the sign (2.0e+5, not 2.0e5): YAML 1.1 parses the unsigned
   # form as a string, and preflight rejects it.
-  bandpass_hz: [2.0e+5, 7.0e+5]
+  bandpass_hz: auto
 
   # Cutting the record into forward sweeps.
   sweeps:
