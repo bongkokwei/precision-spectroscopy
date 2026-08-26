@@ -15,6 +15,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="acquire one sweep")
     p_run.add_argument("config", help="path to the YAML config")
+    p_run.add_argument(
+        "--fit", action="store_true",
+        help="also build the frequency ruler for sweep 0 straight after the capture",
+    )
 
     p_check = sub.add_parser("check", help="validate a config without touching hardware")
     p_check.add_argument("config")
@@ -109,13 +113,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return dispersion.run(args.h5file, sweep=sweep, out=args.out, show=args.show)
 
-    if args.cmd == "fit":
-        fit = ruler.fit_ruler(args.h5file, sweep=sweep)
+    def run_fit(h5file: str) -> None:
+        fit = ruler.fit_ruler(h5file, sweep=sweep)
         print(
             f"sweep {sweep}: degree {fit['degree']} fit, {fit['n_anchors']} anchor(s) "
             f"({fit['dropped_high_j']} dropped), {fit['rms_hz'] / 1e6:.1f} MHz RMS"
         )
         print(f"coeffs (Hz, highest power first): {fit['coeffs']}")
+
+    if args.cmd == "fit":
+        run_fit(args.h5file)
         return 0
 
     if args.cmd == "run":
@@ -125,12 +132,14 @@ def main(argv: list[str] | None = None) -> int:
         # Acquire only. The raw record still holds the parked-laser regions at
         # both ends, and how to trim them is not settled -- so building the
         # frequency ruler (`spectro fit`) stays a separate, explicit step
-        # rather than running on every capture. A raw plot is cheap and is
-        # the first thing you look at, so it runs here.
+        # rather than running on every capture (opt in with --fit). A raw
+        # plot is cheap and is the first thing you look at, so it runs here.
         cfg = config.load(args.config)
         h5_path = acquire.run(cfg, config_path=args.config)
         print(h5_path)
         print(plot.plot_scan(h5_path))
+        if args.fit:
+            run_fit(h5_path)
         return 0
 
     raise AssertionError(f"unhandled command: {args.cmd!r}")
