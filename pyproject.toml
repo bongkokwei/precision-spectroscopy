@@ -20,6 +20,7 @@ dependencies = [
 hw = [
     "agilent-8164b @ git+https://github.com/bongkokwei/agilent-8164b",
     "rigol-dho4204 @ git+https://github.com/bongkokwei/rigol_dho4204",
+    "rigol-dg952 @ git+https://github.com/bongkokwei/rigol-dg952.git",
 ]
 dev = ["pytest"]
 
