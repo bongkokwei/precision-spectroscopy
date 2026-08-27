@@ -213,6 +213,11 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if not h.get("save_all_scans", False):
+        # Close all FileHandlers so Windows releases the run.log locks
+        for handler in logging.root.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+                logging.root.removeHandler(handler)
         for d in run_dirs:
             shutil.rmtree(d)
             log.info("removed %s", d)
