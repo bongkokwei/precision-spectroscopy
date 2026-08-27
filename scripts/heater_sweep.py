@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +53,26 @@ def _extract_window(
         return np.full_like(detuning_grid_hz, np.nan)
     return np.interp(detuning_grid_hz, detuning[mask], dut[mask],
                      left=np.nan, right=np.nan)
+
+
+def _save_progress(
+    path: Path,
+    voltages: np.ndarray,
+    detuning_grid_hz: np.ndarray,
+    slices: list[np.ndarray],
+    f0_cold_hz: float,
+    cfg: dict,
+) -> None:
+    """Overwrite sweep.h5 with data collected so far."""
+    transmission = np.array(slices, dtype=np.float32)
+    with h5py.File(path, "w") as f:
+        f.attrs["timestamp"] = datetime.now().isoformat(timespec="seconds")
+        f.attrs["config_yaml"] = yaml.safe_dump(cfg, sort_keys=False)
+        f.attrs["f0_cold_hz"] = f0_cold_hz
+        f.attrs["n_completed"] = len(slices)
+        f.create_dataset("voltages", data=voltages)
+        f.create_dataset("detuning_ghz", data=detuning_grid_hz / 1e9)
+        f.create_dataset("transmission", data=transmission)
 
 
 def _plot(
@@ -110,8 +129,12 @@ def main(argv: list[str] | None = None) -> int:
     sweep_dir.mkdir(parents=True)
     log.info("sweep output: %s", sweep_dir)
 
+    # Per-step runs go inside the sweep dir, not as siblings in data/.
+    cfg = {**cfg, "run": {**cfg["run"], "dir": str(sweep_dir)}}
+
     from rigol_dg952 import RigolDG952
 
+    sweep_h5 = sweep_dir / "sweep.h5"
     slices = []
     f0_cold_hz = None
     detuning_grid_hz = None
@@ -143,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
                             "cold scan (step 1) failed; cannot continue"
                         ) from exc
                     slices.append(np.full(n_detuning, np.nan))
+                    _save_progress(sweep_h5, voltages, detuning_grid_hz,
+                                   slices, f0_cold_hz, cfg)
                     continue
 
                 if f0_cold_hz is None:
@@ -164,25 +189,15 @@ def main(argv: list[str] | None = None) -> int:
                     _extract_window(freq_hz, dut, f0_cold_hz, half_window_hz,
                                     detuning_grid_hz)
                 )
+                _save_progress(sweep_h5, voltages, detuning_grid_hz,
+                               slices, f0_cold_hz, cfg)
         finally:
             ch.apply_dc(0.0)
             ch.output_off()
             dg.local()
 
-    transmission = np.array(slices)
-    detuning_ghz = detuning_grid_hz / 1e9
-
-    with h5py.File(sweep_dir / "sweep.h5", "w") as f:
-        f.attrs["timestamp"] = datetime.now().isoformat(timespec="seconds")
-        f.attrs["config_yaml"] = yaml.safe_dump(cfg, sort_keys=False)
-        f.attrs["f0_cold_hz"] = f0_cold_hz
-        f.create_dataset("voltages", data=voltages)
-        f.create_dataset("detuning_ghz", data=detuning_ghz)
-        f.create_dataset("transmission", data=transmission.astype(np.float32))
-    log.info("wrote %s", sweep_dir / "sweep.h5")
-
     _plot(
-        voltages, detuning_ghz, transmission,
+        voltages[:len(slices)], detuning_grid_hz / 1e9, np.array(slices),
         sweep_dir / "heater_sweep.png",
         show=args.show,
         dut_name=cfg["run"].get("dut_name", ""),
