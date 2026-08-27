@@ -129,10 +129,21 @@ def main(argv: list[str] | None = None) -> int:
                 ch.apply_dc(v)
                 time.sleep(h["settle_s"])
 
-                h5_path = acquire.run(cfg, config_path=args.config)
+                h5_path = acquire.run(cfg, config_path=args.config,
+                                      restart_scope=False)
                 run_dirs.append(h5_path.parent)
-                ruler.fit_ruler(h5_path)
-                freq_hz, dut, _ = ruler.dut_spectrum(h5_path)
+
+                try:
+                    ruler.fit_ruler(h5_path)
+                    freq_hz, dut, _ = ruler.dut_spectrum(h5_path)
+                except Exception as exc:
+                    log.error("step %d failed: %s", i + 1, exc)
+                    if f0_cold_hz is None:
+                        raise RuntimeError(
+                            "cold scan (step 1) failed; cannot continue"
+                        ) from exc
+                    slices.append(np.full(n_detuning, np.nan))
+                    continue
 
                 if f0_cold_hz is None:
                     _, _, resonances = ruler.find_resonances(h5_path)

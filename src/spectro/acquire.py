@@ -88,7 +88,7 @@ def write_h5(
     log.info("wrote %s (%.2f GB)", path, path.stat().st_size / 1e9)
 
 
-def run(cfg: dict, config_path: str | Path | None = None) -> Path:
+def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = True) -> Path:
     """Execute one sweep and return the path to the written HDF5 file."""
     # Imported here so processing-only installs work without a VISA stack.
     from agilent_8164b import Agilent8164B
@@ -141,8 +141,9 @@ def run(cfg: dict, config_path: str | Path | None = None) -> Path:
             laser.laser_off()
 
         scope.screenshot(str(run_dir / "screenshot.png"))
-        # The scope's front end gets unreliable after a multi-gigabyte readout.
-        scope.system_restart()
+        if restart_scope:
+            # The scope's front end gets unreliable after a multi-gigabyte readout.
+            scope.system_restart()
 
     h5_path = run_dir / "scan.h5"
     write_h5(h5_path, t, data, cfg, idn)
