@@ -203,6 +203,18 @@ gascell:
          P13: 1624.1886, P14: 1625.4928, P15: 1626.8245, P16: 1628.1838,
          P17: 1629.5910, P18: 1630.9860, P19: 1632.4289}
 
+heater:
+  resource: "USB0::0x1AB1::0x0643::DG9A261500188::INSTR"
+  channel: 1                    # DG952 output channel (1 or 2)
+  load_ohm: 500                 # heater resistance; figure says R_h = 500 Ω
+  start_v: 0.0
+  stop_v: 4.0
+  steps: 41                     # voltage points (linspace), ~100 mV per step
+  settle_s: 2.0                 # wait after setting voltage before acquiring
+  window_ghz: 20.0              # frequency window around the target resonance
+  target_thz: 189.742           # ≈ 1580 nm; nearest resonance in the cold scan
+  save_all_scans: false         # true keeps every per-step scan.h5 (~1 GB each)
+
 run:
   dir: "data"
   dut_name: "aux_ring_3"
