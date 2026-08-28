@@ -207,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
 
     transmission = np.array(slices)
     baseline = np.nanmedian(transmission[0])
-    if baseline > 0:
+    if baseline != 0:
         transmission = transmission / baseline  # ponytail: raw V → normalised T
 
     _plot(

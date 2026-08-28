@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
 
     transmission = raw[:n]
     baseline = np.nanmedian(transmission[0])
-    if baseline > 0:
+    if baseline != 0:
         transmission = transmission / baseline
 
     if not args.show:
