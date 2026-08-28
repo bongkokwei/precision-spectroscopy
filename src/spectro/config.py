@@ -68,6 +68,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "dispersion": {
         "ref_nm": 1550.0, "degree": 2, "n_mad": 5.0, "max_iter": 5, "amp_n_mad": 5.0,
+        "amx_floor_hz": 0.0,
     },
 }
 

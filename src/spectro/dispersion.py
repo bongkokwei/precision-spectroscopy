@@ -146,6 +146,7 @@ def fit_dispersion(
     degree: int = 2,
     n_mad: float = 5.0,
     max_iter: int = 5,
+    amx_floor_hz: float = 0.0,
 ) -> dict:
     """Fit frequency vs. mode number with iterative outlier rejection.
 
@@ -190,7 +191,8 @@ def fit_dispersion(
         resid = f0_hz - poly(mu)
         med = np.median(resid[kept])
         sigma = _robust_sigma(resid[kept]) or float(np.std(resid[kept]))
-        new_kept = np.abs(resid - med) < n_mad * sigma
+        threshold = max(n_mad * sigma, amx_floor_hz)
+        new_kept = np.abs(resid - med) < threshold
         if np.array_equal(new_kept, kept):
             break
         kept = new_kept
@@ -343,7 +345,8 @@ def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
     f0_hz = np.array([r["f0_hz"] for r in resonances])
     mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=p["ref_nm"])
     fit = fit_dispersion(
-        mu, f0_hz, degree=p["degree"], n_mad=p["n_mad"], max_iter=p["max_iter"]
+        mu, f0_hz, degree=p["degree"], n_mad=p["n_mad"], max_iter=p["max_iter"],
+        amx_floor_hz=p["amx_floor_hz"],
     )
     return {
         **fit,
