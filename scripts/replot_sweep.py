@@ -113,9 +113,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         voltages, detuning_ghz, transmission, title = _load_sweep_h5(sweep_dir)
 
-    baseline = np.nanmedian(transmission[0])
-    if baseline != 0:
-        transmission = transmission / baseline
+    tmin, tmax = np.nanmin(transmission), np.nanmax(transmission)
+    if tmax > tmin:
+        transmission = (transmission - tmin) / (tmax - tmin)  # ponytail: min-max → [0,1]
 
     if not args.show:
         matplotlib.use("Agg")
@@ -124,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     fig, ax = plt.subplots(figsize=(8, 5))
     mesh = ax.pcolormesh(
         detuning_ghz, voltages, transmission,
-        vmin=0.0, vmax=1.0, cmap="inferno", shading="nearest",
+        vmin=np.nanmin(transmission), vmax=np.nanmax(transmission),
+        cmap="inferno", shading="nearest",
     )
     ax.set_xlabel("Detuning from cold main resonance (GHz)")
     ax.set_ylabel("Heater voltage (V)")
