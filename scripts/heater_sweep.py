@@ -205,8 +205,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         _heater_off()
 
+    transmission = np.array(slices)
+    baseline = np.nanmedian(transmission[0])
+    if baseline > 0:
+        transmission = transmission / baseline  # ponytail: raw V → normalised T
+
     _plot(
-        voltages[:len(slices)], detuning_grid_hz / 1e9, np.array(slices),
+        voltages[:len(slices)], detuning_grid_hz / 1e9, transmission,
         sweep_dir / "heater_sweep.png",
         show=args.show,
         dut_name=cfg["run"].get("dut_name", ""),
