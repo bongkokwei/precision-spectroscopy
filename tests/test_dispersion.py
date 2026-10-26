@@ -151,18 +151,27 @@ def test_dispersion_of_raises_when_no_resonances_were_fit():
             calc_d2.dispersion_of("nowhere/scan.h5")
 
 
-def test_drop_mode_collisions_keeps_the_deeper_resonance(caplog):
-    # Weak second family 9 GHz off two main-family modes, as on the 25 GHz ring.
-    resonances = synthetic_resonance_dicts(d1_hz=25e9, d2_hz=760e3)
-    extra = [
-        {**resonances[i], "f0_hz": resonances[i]["f0_hz"] + 9e9, "amp_hz": 0.01}
-        for i in (10, 40)
+def test_keep_main_family_separates_an_interleaved_family(caplog):
+    # Like the 20261026 25 GHz ring: a second family ~90 MHz/mode off the main
+    # FSR, crossing it mid-band, present at most modes and as deep. seed=1 is
+    # the hard case: the walk strays onto the other family for a few modes
+    # where the two sit within the acceptance window, and fit_dispersion's
+    # outlier rejection has to clean up after it.
+    resonances = synthetic_resonance_dicts(d1_hz=25.168e9, d2_hz=20e3, n=401, seed=1)
+    rng = np.random.default_rng(2)
+    main = [r for r in resonances if rng.random() > 0.1]  # some main modes undetected
+    f_mid = resonances[200]["f0_hz"]
+    second = [
+        {"f0_hz": f_mid + 3e9 + m * 25.078e9, "amp_hz": 0.3, "fwhm_hz": 2e8, "q": 1e6}
+        for m in range(-200, 201) if rng.random() < 0.6
     ]
-    with pytest.raises(ValueError, match="collide"):
-        calc_d2.assign_mode_numbers([r["f0_hz"] for r in resonances + extra], ref_nm=1550.0)
-
     with caplog.at_level("WARNING"):
-        kept = calc_d2.drop_mode_collisions(resonances + extra, ref_nm=1550.0)
-    assert "2 mode-number collision(s)" in caplog.text
-    assert sorted(r["f0_hz"] for r in kept) == sorted(r["f0_hz"] for r in resonances)
-    calc_d2.assign_mode_numbers([r["f0_hz"] for r in kept], ref_nm=1550.0)  # no raise
+        kept = calc_d2.keep_main_family(main + second, ref_nm=1550.0)
+    assert "off the main mode family" in caplog.text
+    main_f = {r["f0_hz"] for r in main}
+    assert sum(r["f0_hz"] in main_f for r in kept) / len(kept) > 0.95
+
+    f = np.array([r["f0_hz"] for r in kept])
+    mu, _ = calc_d2.assign_mode_numbers(f, ref_nm=1550.0)  # no collision
+    fit = calc_d2.fit_dispersion(mu, f, degree=2)
+    assert fit["d2_hz"] == pytest.approx(20e3, rel=1e-2)
