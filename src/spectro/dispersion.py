@@ -85,6 +85,69 @@ def filter_resonances(resonances: list[dict], n_mad: float = 5.0) -> list[dict]:
     return kept
 
 
+def _round_to_modes(f_sorted: np.ndarray, ref_nm: float) -> tuple[np.ndarray, int, float]:
+    """Mode number per ascending frequency, mu=0 nearest ref_nm, in units of the median spacing.
+
+    Returns (mu, index of the mu=0 resonance, FSR estimate in Hz).
+    """
+    fsr_est = float(np.median(np.diff(f_sorted)))
+    i_ref = int(np.argmin(np.abs(f_sorted - C_M_S / (ref_nm * 1e-9))))
+    mu = np.round((f_sorted - f_sorted[i_ref]) / fsr_est).astype(int)
+    return mu, i_ref, fsr_est
+
+
+def drop_mode_collisions(resonances: list[dict], ref_nm: float = 1550.0) -> list[dict]:
+    """Where two resonances round to the same mode number, keep the deeper one.
+
+    A second, weaker mode family (other polarisation, higher-order transverse
+    mode) shows up as an extra resonance sitting a fraction of an FSR off the
+    main family -- on the 20261026 25 GHz ring, three of them, 8.7-11 GHz
+    from their neighbours and drifting ~90 MHz per mode, i.e. a family with
+    its own FSR. assign_mode_numbers assumes a single family and would raise
+    on these. Keeping the larger |amp_hz| keeps the dominant family; if the
+    wrong one wins somewhere, it sits GHz off the curve and fit_dispersion's
+    MAD rejection removes it.
+
+    ponytail: depth is the only tiebreak -- breaks down where the second
+    family is as deep as the main one (near a crossing); separate families
+    by FSR then.
+
+    Args:
+        resonances: Output of filter_resonances().
+        ref_nm: Same reference as assign_mode_numbers, so the mode bins match.
+
+    Returns:
+        resonances with the shallower member of each collision removed,
+        ascending in frequency. Warns with what was dropped, since it means
+        the DUT spectrum is not single-family.
+    """
+    if len(resonances) <= 2:
+        return list(resonances)
+    res = sorted(resonances, key=lambda r: r["f0_hz"])
+    mu, _, fsr_est = _round_to_modes(np.array([r["f0_hz"] for r in res]), ref_nm)
+
+    keep: dict[int, dict] = {}
+    dropped = []
+    for m, r in zip(mu.tolist(), res):
+        if m not in keep:
+            keep[m] = r
+            continue
+        weak, keep[m] = sorted([keep[m], r], key=lambda x: abs(x["amp_hz"]))
+        dropped.append((m, weak, keep[m]))
+    if dropped:
+        log.warning(
+            "%d mode-number collision(s) at FSR estimate %.3f GHz -- more than one mode "
+            "family in this DUT spectrum; kept the deeper resonance of each, dropped: %s",
+            len(dropped), fsr_est / 1e9,
+            ", ".join(
+                f"mu={m} {C_M_S / w['f0_hz'] * 1e9:.3f} nm (amp={w['amp_hz']:+.5f}, "
+                f"{(w['f0_hz'] - k['f0_hz']) / 1e9:+.2f} GHz from kept)"
+                for m, w, k in dropped
+            ),
+        )
+    return sorted(keep.values(), key=lambda r: r["f0_hz"])
+
+
 def assign_mode_numbers(f0_hz: np.ndarray, ref_nm: float = 1550.0) -> tuple[np.ndarray, int]:
     """Assign an integer mode number to each resonance frequency.
 
@@ -112,13 +175,8 @@ def assign_mode_numbers(f0_hz: np.ndarray, ref_nm: float = 1550.0) -> tuple[np.n
     f0_hz = np.asarray(f0_hz, dtype=float)
     order = np.argsort(f0_hz)
     f_sorted = f0_hz[order]
-    fsr_est = float(np.median(np.diff(f_sorted)))
-
-    ref_hz = C_M_S / (ref_nm * 1e-9)
-    i_ref_sorted = int(np.argmin(np.abs(f_sorted - ref_hz)))
+    mu_sorted, i_ref_sorted, fsr_est = _round_to_modes(f_sorted, ref_nm)
     f_ref = f_sorted[i_ref_sorted]
-
-    mu_sorted = np.round((f_sorted - f_ref) / fsr_est).astype(int)
 
     values, counts = np.unique(mu_sorted, return_counts=True)
     dupes = values[counts > 1]
@@ -326,7 +384,8 @@ def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
 
     Returns:
         The fit_dispersion() dict -- poly, kept, d1_hz, d2_hz, rms_hz -- plus
-        mu, f0_hz, ref_index, amx, and the n_fit/n_failed/n_kept counts.
+        mu, f0_hz, ref_index, amx, and the n_fit/n_failed/n_collided/n_kept
+        counts.
     """
     h5_path = Path(h5_path)
     _, _, cfg = plot.load_h5(h5_path, roles=())  # attrs only; no channel is read
@@ -341,6 +400,8 @@ def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
 
     n_fit = len(resonances)
     resonances = filter_resonances(resonances, n_mad=p["amp_n_mad"])
+    n_filtered = len(resonances)
+    resonances = drop_mode_collisions(resonances, ref_nm=p["ref_nm"])
 
     f0_hz = np.array([r["f0_hz"] for r in resonances])
     mu, ref_index = assign_mode_numbers(f0_hz, ref_nm=p["ref_nm"])
@@ -355,7 +416,8 @@ def dispersion_of(h5_path: str | Path, sweep: int = 0) -> dict:
         "ref_index": ref_index,
         "amx": amx_candidates(mu, f0_hz, fit),
         "n_fit": n_fit,
-        "n_failed": n_fit - len(resonances),
+        "n_failed": n_fit - n_filtered,
+        "n_collided": n_filtered - len(resonances),
         "n_kept": int(fit["kept"].sum()),
     }
 
@@ -374,7 +436,7 @@ def run(h5file: str | Path, sweep: int = 0, out: str | Path | None = None,
 
     print(
         f"{d['n_fit']} resonance(s): {d['n_failed']} dropped as low-amplitude fit "
-        f"failures, {d['n_kept']} used in fit, {len(d['amx'])} excluded as AMX "
+        f"failures, {d['n_collided']} as a second mode family, {d['n_kept']} used in fit, {len(d['amx'])} excluded as AMX "
         "candidate(s)"
     )
     print(

@@ -149,3 +149,20 @@ def test_dispersion_of_raises_when_no_resonances_were_fit():
         mp.setattr(calc_d2.ruler, "find_resonances", lambda *a, **k: (None, None, []))
         with _pytest.raises(ValueError, match="no resonances"):
             calc_d2.dispersion_of("nowhere/scan.h5")
+
+
+def test_drop_mode_collisions_keeps_the_deeper_resonance(caplog):
+    # Weak second family 9 GHz off two main-family modes, as on the 25 GHz ring.
+    resonances = synthetic_resonance_dicts(d1_hz=25e9, d2_hz=760e3)
+    extra = [
+        {**resonances[i], "f0_hz": resonances[i]["f0_hz"] + 9e9, "amp_hz": 0.01}
+        for i in (10, 40)
+    ]
+    with pytest.raises(ValueError, match="collide"):
+        calc_d2.assign_mode_numbers([r["f0_hz"] for r in resonances + extra], ref_nm=1550.0)
+
+    with caplog.at_level("WARNING"):
+        kept = calc_d2.drop_mode_collisions(resonances + extra, ref_nm=1550.0)
+    assert "2 mode-number collision(s)" in caplog.text
+    assert sorted(r["f0_hz"] for r in kept) == sorted(r["f0_hz"] for r in resonances)
+    calc_d2.assign_mode_numbers([r["f0_hz"] for r in kept], ref_nm=1550.0)  # no raise
