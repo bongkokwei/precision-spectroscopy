@@ -3,8 +3,8 @@
 scope:
   resource: "USB0::0x1AB1::0x0610::HDO4A261600266::INSTR"
   duration_s: 20.0          # capture window; must exceed the sweep duration
-  points: 50000000          # sample rate = points / duration_s
-  memory_depth: "50M"
+  points: 50_000_000          # sample rate = points / duration_s
+  memory_depth: 50_000_000  # scope memory depth; must exceed points
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 2.00, offset: -4.0}
     gascell: {ch: 2, scale: 1.00, offset: -6.0}
@@ -111,11 +111,12 @@ process:
   dispersion:
     ref_nm: 1550.0            # wavelength of mode mu = 0
     degree: 2
-    n_mad: 5.0                # fit-residual rejection; the rejects are the
+    n_mad: 3.0                # fit-residual rejection; the rejects are the
                               # avoided-mode-crossing candidates
     max_iter: 5               # rejection rounds
     amp_n_mad: 5.0            # low-amplitude fit-failure rejection, before
                               # mode numbers are assigned
+    amx_floor_hz: 150.0e+6  # 150 MHz absolute floor
 
 gascell:
   # Wavelength References tri-gas cell, 80 cm multi-pass (H(80) housing).
@@ -124,7 +125,7 @@ gascell:
   # are kept so a fit can report which line it anchored on.
   #
   # Only lines inside laser.start_nm..stop_nm are usable -- see
-  # config.gas_lines_nm(). The 1500-1640 nm sweep above reaches every line
+  # config.gas_lines_nm(). The 1500-1600 nm sweep above reaches every line
   # in the cell.
   model: "Tri-H(80)-5/150/150"
   species:
@@ -208,14 +209,15 @@ heater:
   channel: 2                    # DG952 output channel (1 or 2)
   load_ohm: 500                 # heater resistance; figure says R_h = 500 Ω
   start_v: 0.0
-  stop_v: 4.0
+  stop_v: 2.0
   steps: 41                     # voltage points (linspace), ~100 mV per step
-  settle_s: 2.0                 # wait after setting voltage before acquiring
+  settle_s: 1.0                 # wait after setting voltage before acquiring
   window_ghz: 20.0              # frequency window around the target resonance
-  target_thz: 189.742           # ≈ 1580 nm; nearest resonance in the cold scan
-  save_all_scans: false         # true keeps every per-step scan.h5 (~1 GB each)
+  target_thz: 189.55           # ≈ 1580 nm; nearest resonance in the cold scan
+  save_all_scans: true         # true keeps every per-step scan.h5 (~1 GB each)
 
 run:
   dir: "data"
-  dut_name: "aux_ring_3"
+  # dut_name: "aux_ring_3"
+  dut_name: "ring_pm_short"
   notes: ""
