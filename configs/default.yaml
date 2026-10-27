@@ -29,10 +29,10 @@ process:
   # in its signatures; a file written before this section existed still loads,
   # the functions fall back to the same values.
   #
-  # These are chosen *after* the capture, unlike the sections above, so the
-  # copy frozen into scan.h5 is the acquisition-time guess, not necessarily
-  # what a later `spectro fit` ran with. What was actually used is recorded in
-  # the ruler/sweep_<n> group of the file it produced.
+  # These are chosen *after* the capture, unlike the sections above. To
+  # re-analyse a run, edit this block in the run folder's config.yaml and rerun
+  # `spectro fit` / `spectro d2`: it beats the copy frozen into scan.h5. What a
+  # fit actually used is recorded in the ruler/sweep_<n> group of the file.
 
   # Step 2: MZI phase. Band-pass applied before the Hilbert transform, and not
   # optional -- without it the unwrapped phase goes non-monotonic, because

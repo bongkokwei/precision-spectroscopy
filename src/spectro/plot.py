@@ -17,6 +17,8 @@ import h5py
 import numpy as np
 import yaml
 
+from . import config
+
 log = logging.getLogger(__name__)
 
 # Okabe-Ito, colourblind-safe and easier on the eye than the matplotlib default.
@@ -40,6 +42,19 @@ def load_h5(
     """
     with h5py.File(h5_path, "r") as f:
         cfg = yaml.safe_load(f.attrs["config_yaml"])
+        # The run folder's config.yaml is the editable copy: its process block
+        # beats the one frozen at capture, so re-analysing a run is an edit to
+        # that file. Hardware sections stay frozen -- they say what was captured.
+        sidecar = Path(h5_path).with_name("config.yaml")
+        if sidecar.exists():
+            process = (yaml.safe_load(sidecar.read_text()) or {}).get("process")
+            if process:
+                if bad := config._unparsed_numbers(process):
+                    raise ValueError(
+                        f"{sidecar}: process.{bad[0][0]} is the string {bad[0][1]!r}; "
+                        f"write exponents with a sign, e.g. 2.0e+5"
+                    )
+                cfg["process"] = process
         n = int(f.attrs["n_samples"])
         t_s = f.attrs["t0_s"] + f.attrs["dt_s"] * np.arange(n)
         role_of = {c["ch"]: role for role, c in cfg["scope"]["channels"].items()}

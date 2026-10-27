@@ -467,8 +467,8 @@ def run(h5file: str | Path, sweep: int = 0, out: str | Path | None = None,
     """Print D1 and D2 for one sweep and write the D_int diagnostic plot.
 
     The fit knobs -- ref_nm, degree, n_mad, max_iter, amp_n_mad -- live in
-    process.dispersion of the config the scan was taken with, so a run folder
-    records what produced its numbers. Edit the config, not a flag.
+    process.dispersion of the run folder's config.yaml (see plot.load_h5), so
+    the folder records what produced its numbers. Edit that file, not a flag.
     """
     h5_path = Path(h5file)
     d = dispersion_of(h5_path, sweep)

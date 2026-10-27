@@ -141,3 +141,19 @@ def test_plot_phase_draws_the_spectrogram_panel(scan):
     fig = plt.figure()
     assert len(fig.axes) == 0  # figures are closed, not leaked
     plt.close(fig)
+
+
+def test_run_folder_config_overrides_frozen_process_block(scan):
+    """Editing config.yaml beside scan.h5 re-tunes the analysis; hardware stays frozen."""
+    sidecar = scan.with_name("config.yaml")
+    sidecar.write_text(yaml.safe_dump({
+        "laser": {"start_nm": 0.0},
+        "process": {"dispersion": {"degree": 3}},
+    }))
+    _, _, cfg = plot.load_h5(scan, roles=())
+    assert cfg["process"] == {"dispersion": {"degree": 3}}
+    assert cfg["laser"]["start_nm"] == 1500.0
+
+    sidecar.write_text("process:\n  resonances:\n    expected_fwhm_hz: 2.0e8\n")
+    with pytest.raises(ValueError, match="not a number|string"):
+        plot.load_h5(scan, roles=())
