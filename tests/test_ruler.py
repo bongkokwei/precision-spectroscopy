@@ -511,3 +511,34 @@ def test_band_for_rejects_a_word_that_is_not_auto():
     cfg = {"process": {"bandpass_hz": "wide"}}
     with pytest.raises(ValueError, match="auto"):
         ruler.band_for(cfg, np.zeros(1024), REAL_FS_HZ)
+
+
+def test_divide_baseline_recovers_dips_a_wandering_baseline_hides():
+    """Dips on a baseline that wanders more than they are deep, at negative volts
+    like the real scope trace: detection on the raw trace misses the ones where
+    the baseline sits above the median; after divide_baseline all are found."""
+    from spectro.ruler import divide_baseline
+
+    rng = np.random.default_rng(1)
+    f = np.arange(0.0, 1.0e12, 5.0e6)                       # 1 THz at 5 MHz
+    f0s = np.arange(20e9, 1.0e12 - 20e9, 37e9)
+    dips = sum(0.5 / (1 + ((f - c) / 1e8) ** 2) for c in f0s)  # 200 MHz FWHM
+    y = -57.0 + 1.0 * np.sin(2 * np.pi * f / 300e9) - dips + 0.02 * rng.standard_normal(len(f))
+
+    def n_found(trace):
+        fit = fit_resonances(f, trace, expected_fwhm_hz=2e8, snr=10.0)
+        got = np.array([r["f0_hz"] for r in fit])
+        return sum(np.min(np.abs(got - c)) < 1e8 for c in f0s) if len(got) else 0
+
+    clean = divide_baseline(f, y, 20e9, 90.0)
+    assert n_found(clean) == len(f0s)
+    assert n_found(y) < 0.8 * len(f0s)                      # the failure being fixed
+    assert np.all([r["amp_hz"] < 0 for r in fit_resonances(f, clean, 2e8, 10.0)])
+
+
+def test_block_mean_averages_and_drops_the_tail():
+    from spectro.ruler import block_mean
+
+    assert np.allclose(block_mean(np.arange(10.0), 3), [1.0, 4.0, 7.0])
+    x = np.arange(4.0)
+    assert block_mean(x, 1) is x

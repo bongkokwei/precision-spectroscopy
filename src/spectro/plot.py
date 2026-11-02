@@ -45,8 +45,14 @@ def load_h5(
         # The run folder's config.yaml is the editable copy: its process block
         # beats the one frozen at capture, so re-analysing a run is an edit to
         # that file. Hardware sections stay frozen -- they say what was captured.
-        sidecar = Path(h5_path).with_name("config.yaml")
-        if sidecar.exists():
+        # No config.yaml beside the scan -> the parent folder's, so one edit
+        # re-tunes every step of a heater sweep.
+        here = Path(h5_path).resolve().parent
+        sidecar = next(
+            (d / "config.yaml" for d in (here, here.parent) if (d / "config.yaml").exists()),
+            None,
+        )
+        if sidecar:
             process = (yaml.safe_load(sidecar.read_text()) or {}).get("process")
             if process:
                 if bad := config._unparsed_numbers(process):

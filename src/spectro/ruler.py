@@ -764,7 +764,9 @@ def dut_spectrum(
             ruler/sweep_<n> in the file if not given -- run `spectro fit`
             first if that group does not exist yet.
 
-    The output grid is set by process.spectrum in the config.
+    The output grid is set by process.spectrum in the config, and the trace is
+    averaged and divided by its baseline per process.clean (see block_mean and
+    divide_baseline).
 
     Returns:
         (freq_hz, dut, fit): ascending frequency grid, DUT transmission on
@@ -789,11 +791,53 @@ def dut_spectrum(
     phi = phase_rad(mzi, 1.0 / dt_s, band_for(cfg, mzi, 1.0 / dt_s, band))
 
     p = config.params(cfg, "spectrum")
-    nu = nu_hz(phi, fit)
+    c = config.params(cfg, "clean")
+    nu, dut = nu_hz(phi, fit), traces["dut"][sl].astype(float)
+    if c["avg_hz"]:
+        n = int(round(c["avg_hz"] / abs(float(np.median(np.diff(nu))))))
+        nu, dut = block_mean(nu, n), block_mean(dut, n)
     freq_hz, dut = resample_uniform(
-        nu, traces["dut"][sl], n_points=p["n_points"], trim_frac=p["trim_frac"]
+        nu, dut, n_points=p["n_points"], trim_frac=p["trim_frac"]
     )
+    if c["baseline_ghz"]:
+        dut = divide_baseline(freq_hz, dut, c["baseline_ghz"] * 1e9, c["baseline_pctile"])
     return freq_hz, dut, fit
+
+
+def block_mean(y: np.ndarray, n: int) -> np.ndarray:
+    """Mean of consecutive blocks of n samples; a trailing partial block is dropped.
+
+    Used before resample_uniform, which interpolates and so would pick samples
+    rather than average them: white noise drops by sqrt(n) only this way.
+    """
+    if n <= 1:
+        return y
+    m = len(y) // n * n
+    return y[:m].reshape(-1, n).mean(axis=1)
+
+
+def divide_baseline(
+    freq_hz: np.ndarray, y: np.ndarray, window_hz: float, pctile: float = 90.0
+) -> np.ndarray:
+    """y over its slowly varying baseline, so the result sits at +-1.
+
+    The baseline is the pctile-th percentile of each block a quarter of
+    window_hz wide, interpolated between block centres -- a true rolling
+    percentile over ~10 M samples would take minutes for the same answer, as the
+    baseline varies over THz. A high percentile keeps narrow dips from pulling
+    it down (use a low one for peaks).
+
+    Divides by |baseline|, not baseline, so a trace recorded at negative volts
+    keeps its dips pointing down. If the trace's zero is not true zero light
+    (an uncorrected scope offset), the baseline still comes out flat but dip
+    depths are no longer transmission.
+    """
+    df = abs(float(freq_hz[1] - freq_hz[0]))
+    blk = max(int(window_hz / 4 / df), 1)
+    starts = np.arange(0, len(y), blk)
+    centres = np.array([freq_hz[i : i + blk].mean() for i in starts])
+    base = np.array([np.percentile(y[i : i + blk], pctile) for i in starts])
+    return y / np.abs(np.interp(freq_hz, centres, base))
 
 
 def _lorentzian(f, f0, fwhm, amp, baseline):

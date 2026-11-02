@@ -12,9 +12,16 @@ which is valid as long as each step shifts the mode by less than FSR/2.
 Writes <run.dir>/<timestamp>_aux_track/aux_track.h5 after every step, and
 aux_track.png at the end (wrapped detuning against heater power).
 
+The sweep folder holds the one editable config.yaml (step folders get none),
+which spectro.plot.load_h5 falls back to for every step. To re-analyse with
+new process.* knobs -- cleaning, resonance detection -- or a new
+heater.target_thz, edit that file and run --reprocess; it needs
+save_all_scans: true at capture time.
+
 Usage:
     python scripts/aux_track.py configs/default.yaml
     python scripts/aux_track.py configs/default.yaml --show
+    python scripts/aux_track.py --reprocess data/<stamp>_aux_track
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -82,13 +90,67 @@ def _plot(power_mw, detuning_hz, out: Path, show: bool, title: str) -> None:
     plt.close(fig)
 
 
+def _analyse(h5_path: Path) -> list[dict]:
+    """Every resonance in one step's scan; [] if the step's analysis fails."""
+    try:
+        return ruler.find_resonances(h5_path)[2]
+    except Exception as exc:
+        log.error("%s: %s", h5_path, exc)
+        return []  # step kept, with NaN detuning, so indices stay aligned
+
+
+def _finish(out_dir: Path, voltages, per_step, ref_hz, cfg, show: bool) -> None:
+    load_ohm = cfg["heater"]["load_ohm"]
+    _save(out_dir / "aux_track.h5", voltages, load_ohm, per_step, ref_hz, cfg)
+    v = voltages[: len(per_step)]
+    _plot(v**2 / load_ohm * 1e3,
+          np.array([nearest_detuning(r, ref_hz) for r in per_step]),
+          out_dir / "aux_track.png", show, cfg["run"].get("dut_name", ""))
+
+
+def reprocess(sweep_dir: Path, show: bool = False) -> None:
+    """Rebuild aux_track.h5/.png from the saved per-step scans.
+
+    Knobs come from sweep_dir/config.yaml (process.* via load_h5's parent
+    lookup, heater.target_thz here); the ruler fit stored in each scan.h5 is
+    reused, since cleaning and resonance fitting come after it.
+    """
+    with h5py.File(sweep_dir / "aux_track.h5", "r") as f:
+        voltages = f["voltages"][:]
+        cfg = yaml.safe_load(f.attrs["config_yaml"])
+        ref_hz = float(f.attrs["ref_hz"])
+    sidecar = sweep_dir / "config.yaml"
+    if sidecar.exists():
+        cfg = yaml.safe_load(sidecar.read_text())
+        ref_hz = cfg["heater"]["target_thz"] * 1e12
+    scans = sorted(sweep_dir.glob("*/scan.h5"))[: len(voltages)]
+    if len(scans) < len(voltages):
+        raise SystemExit(f"{len(voltages)} steps but {len(scans)} scan.h5 under "
+                         f"{sweep_dir}; was save_all_scans off?")
+    per_step = []
+    for i, h5_path in enumerate(scans):
+        per_step.append(_analyse(h5_path))
+        log.info("step %d/%d: %d resonance(s), nearest at %+.3f GHz", i + 1,
+                 len(scans), len(per_step[-1]), nearest_detuning(per_step[-1], ref_hz) / 1e9)
+    _finish(sweep_dir, voltages, per_step, ref_hz, cfg, show)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("config", help="path to the YAML config")
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("config", nargs="?", help="path to the YAML config")
+    parser.add_argument("--reprocess", type=Path, metavar="SWEEP_DIR",
+                        help="re-analyse a saved sweep instead of measuring")
     parser.add_argument("--show", action="store_true", help="open interactive plot")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-8s %(message)s")
+
+    if args.reprocess:
+        reprocess(args.reprocess, args.show)
+        return 0
+    if not args.config:
+        parser.error("give a config to measure, or --reprocess SWEEP_DIR")
 
     cfg = config.load(args.config)
     h = cfg["heater"]
@@ -99,8 +161,8 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = Path(cfg["run"]["dir"]) / f"{datetime.now():%Y%m%d-%H%M%S}_aux_track"
     out_dir.mkdir(parents=True)
+    shutil.copy(args.config, out_dir / "config.yaml")  # the one editable copy
     cfg = {**cfg, "run": {**cfg["run"], "dir": str(out_dir)}}
-    out_h5 = out_dir / "aux_track.h5"
     log.info("output: %s", out_dir)
 
     from rigol_dg952 import RigolDG952
@@ -122,19 +184,17 @@ def main(argv: list[str] | None = None) -> int:
             log.info("--- step %d/%d: %.3f V ---", i + 1, len(voltages), v)
             set_heater(v, init=(i == 0))
             time.sleep(h["settle_s"])
-            h5_path = acquire.run(cfg, config_path=args.config, restart_scope=False)
+            # config_path=None: no per-step config.yaml, so the sweep folder's wins
+            h5_path = acquire.run(cfg, config_path=None, restart_scope=False)
             run_dirs.append(h5_path.parent)
-
             try:
                 ruler.fit_ruler(h5_path)
-                _, _, res = ruler.find_resonances(h5_path)
             except Exception as exc:
-                log.error("step %d failed: %s", i + 1, exc)
-                res = []  # step kept, with NaN detuning, so indices stay aligned
-            per_step.append(res)
+                log.error("step %d ruler fit failed: %s", i + 1, exc)
+            per_step.append(_analyse(h5_path))
             log.info("%d resonance(s), nearest at %+.3f GHz from ref",
-                     len(res), nearest_detuning(res, ref_hz) / 1e9)
-            _save(out_h5, voltages, h["load_ohm"], per_step, ref_hz, cfg)
+                     len(per_step[-1]), nearest_detuning(per_step[-1], ref_hz) / 1e9)
+            _save(out_dir / "aux_track.h5", voltages, h["load_ohm"], per_step, ref_hz, cfg)
     finally:
         with RigolDG952(h["resource"]) as dg:
             ch = dg.channel(h["channel"])
@@ -142,10 +202,7 @@ def main(argv: list[str] | None = None) -> int:
             ch.output_off()
             dg.local()
 
-    v = voltages[: len(per_step)]
-    _plot(v**2 / h["load_ohm"] * 1e3,
-          np.array([nearest_detuning(r, ref_hz) for r in per_step]),
-          out_dir / "aux_track.png", args.show, cfg["run"].get("dut_name", ""))
+    _finish(out_dir, voltages, per_step, ref_hz, cfg, args.show)
 
     if not h.get("save_all_scans", False):
         for handler in logging.root.handlers[:]:  # release run.log on Windows
@@ -170,7 +227,6 @@ def _demo() -> None:
 
 
 if __name__ == "__main__":
-    import sys
     if sys.argv[1:] == ["--demo"]:
         _demo()
     else:

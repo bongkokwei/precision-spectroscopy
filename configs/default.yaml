@@ -94,6 +94,20 @@ process:
                               # to drop the Hilbert transform's edge artefacts
     n_points: null            # output grid size; null = the sweep's own count
 
+  # Step 5b: clean the DUT trace before resonances are looked for. Runs inside
+  # dut_spectrum, so every command that reads a DUT spectrum (plot --resonances,
+  # d2, the heater scripts) uses it. Set a knob to null to switch that part off.
+  clean:
+    avg_hz: 1.0e+7            # average raw samples in blocks this wide in optical
+                              # frequency, before resampling. At 0.5 MHz/sample
+                              # that is 20 samples (noise down sqrt(20) ~ 4.5x),
+                              # still 20 points across a 200 MHz FWHM
+    baseline_ghz: 20.0        # divide by a rolling baseline over this window:
+                              # far wider than a resonance, far narrower than the
+                              # ~3 THz wander from laser power / coupler / polarisation
+    baseline_pctile: 90.0     # high percentile so dips don't pull the baseline
+                              # down; use ~10 if the resonances are peaks
+
   # Step 6: resonance fits.
   resonances:
     expected_fwhm_hz: 2.0e+8  # order of magnitude only, the real linewidth

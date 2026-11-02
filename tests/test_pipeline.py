@@ -154,6 +154,15 @@ def test_run_folder_config_overrides_frozen_process_block(scan):
     assert cfg["process"] == {"dispersion": {"degree": 3}}
     assert cfg["laser"]["start_nm"] == 1500.0
 
+    # No config.yaml beside the scan -> the parent folder's (a heater sweep).
+    sidecar.unlink()
+    (scan.parent.parent / "config.yaml").write_text(
+        yaml.safe_dump({"process": {"dispersion": {"degree": 4}}}))
+    try:
+        assert plot.load_h5(scan, roles=())[2]["process"] == {"dispersion": {"degree": 4}}
+    finally:
+        (scan.parent.parent / "config.yaml").unlink()
+
     sidecar.write_text("process:\n  resonances:\n    expected_fwhm_hz: 2.0e8\n")
     with pytest.raises(ValueError, match="not a number|string"):
         plot.load_h5(scan, roles=())

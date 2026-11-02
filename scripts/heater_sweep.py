@@ -128,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_heater_sweep"
     )
     sweep_dir.mkdir(parents=True)
+    shutil.copy(args.config, sweep_dir / "config.yaml")  # one editable copy per sweep
     log.info("sweep output: %s", sweep_dir)
 
     # Per-step runs go inside the sweep dir, not as siblings in data/.
@@ -164,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
             _set_heater(v, init=(i == 0))
             time.sleep(h["settle_s"])
 
-            h5_path = acquire.run(cfg, config_path=args.config,
+            h5_path = acquire.run(cfg, config_path=None,  # sweep's config.yaml wins
                                   restart_scope=False)
             run_dirs.append(h5_path.parent)
 

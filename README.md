@@ -35,7 +35,14 @@ spectro d2   data/<run>/scan.h5                  # ring dispersion: D1 (FSR), D2
 
 Every analysis knob lives in `process.*` of the config the scan was taken
 with, never in a flag — so the run folder always records what produced a
-number.
+number. To re-analyse, edit `process.*` in the run folder's `config.yaml` and
+rerun the same command. A scan with no `config.yaml` beside it uses its parent
+folder's, so a heater sweep (`scripts/aux_track.py`, `scripts/heater_sweep.py`)
+has one file for every step:
+
+```bash
+python scripts/aux_track.py --reprocess data/<stamp>_aux_track
+```
 
 `run` acquires and stops. The raw record spans the whole capture window,
 including the parked-laser regions at each end where the MZI has no carrier,
@@ -63,6 +70,11 @@ Five steps, one forward sweep at a time:
    (`ruler.fit_ruler`, `spectro fit`).
 4. Map the DUT trace onto that absolute frequency axis using the stored fit
    (`ruler.dut_spectrum`).
+   On the way, the DUT is cleaned per `process.clean`: raw samples are
+   averaged in blocks `avg_hz` wide (`ruler.block_mean`, before resampling so
+   it really averages), then divided by a rolling high-percentile baseline
+   (`ruler.divide_baseline`), which flattens laser-power / coupler /
+   polarisation wander to +-1. On by default; null a knob to switch it off.
 5. Fit a Lorentzian to each resonance in the DUT spectrum
    (`ruler.fit_resonances`, `plot --resonances`).
 

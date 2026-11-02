@@ -62,13 +62,14 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "anchors": {"resolution_pm": 1.0, "snr": 20.0, "tol_nm": 0.1, "n_mad": 5.0},
     "ruler": {"degree": 2, "max_j": 20, "max_j_species": "H12C14N"},
     "spectrum": {"trim_frac": 0.02, "n_points": None},
+    "clean": {"avg_hz": 1.0e7, "baseline_ghz": 20.0, "baseline_pctile": 90.0},
     "resonances": {
         "expected_fwhm_hz": 2.0e8, "snr": 100.0,
         "window_fwhm": 4.0, "window_gap_frac": 0.4,
     },
     "dispersion": {
-        "ref_nm": 1550.0, "degree": 2, "n_mad": 5.0, "max_iter": 5, "amp_n_mad": 5.0,
-        "amx_floor_hz": 0.0,
+        "ref_nm": 1550.0, "degree": 2, "n_mad": 3.0, "max_iter": 5, "amp_n_mad": 5.0,
+        "amx_floor_hz": 150.0e6,
     },
 }
 
