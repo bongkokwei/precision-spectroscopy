@@ -31,6 +31,18 @@ from spectro import ruler  # noqa: E402
 log = logging.getLogger(__name__)
 
 
+def above_dark(dut: np.ndarray) -> np.ndarray:
+    """Signal above the dark floor, positive-going whatever the readout polarity.
+
+    A trace recorded at negative volts has its peaks going more negative, and
+    a log axis shows none of it; flip it so the bulk sits positive, then take
+    the 1st percentile as the dark floor.
+    """
+    # ponytail: assumes drop-port peaks; for through-port dips this flips them up.
+    y = dut * np.sign(np.nanmedian(dut) or 1.0)
+    return y - np.nanpercentile(y, 1)
+
+
 def stationary_ratio(stack: np.ndarray) -> np.ndarray:
     """Each step over the median of all steps, per frequency bin."""
     return stack / np.nanmedian(stack, axis=0)
@@ -71,13 +83,20 @@ def main(argv: list[str] | None = None) -> int:
             log.error("step %d (%s): %s", i + 1, scan.parent.name, exc)
             continue
         m = (freq_hz >= lo) & (freq_hz <= hi)
+        if not m.any():
+            log.error("step %d: spectrum %.3f-%.3f THz misses the zoom range", i + 1,
+                      freq_hz[0] / 1e12, freq_hz[-1] / 1e12)
+            continue
+        log.info("step %d raw DUT in range: %.3g .. %.3g", i + 1, dut[m].min(), dut[m].max())
+        dut = above_dark(dut[m])
+        freq_hz = freq_hz[m]
         stack[i] = np.interp(grid, freq_hz, dut, left=np.nan, right=np.nan)
 
         fig, ax = plt.subplots(figsize=(14, 4))
-        ax.semilogy(freq_hz[m] / 1e12, np.clip(dut[m], 1e-4, None), lw=0.4, color="0.3")
+        ax.semilogy(freq_hz / 1e12, dut, lw=0.4, color="0.3")
         ax.set_xlim(*args.thz)
         ax.set_xlabel("Frequency (THz)")
-        ax.set_ylabel("DUT (arb., log)")
+        ax.set_ylabel("DUT above dark floor (arb., log)")
         ax.set_title(f"step {i + 1:03d}  {v:.3f} V  ({scan.parent.name})")
         fig.tight_layout()
         fig.savefig(out / f"step_{i + 1:03d}_{v:.3f}V.png", dpi=150)
@@ -86,10 +105,10 @@ def main(argv: list[str] | None = None) -> int:
 
     ext = [args.thz[0], args.thz[1], voltages[0], voltages[n - 1]]
     fig, (a, b) = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
-    a.imshow(np.log10(np.clip(stack, 1e-4, None)), aspect="auto", origin="lower",
+    a.imshow(np.log10(stack), aspect="auto", origin="lower",
              extent=ext, cmap="inferno", interpolation="nearest")
-    a.set_title("log10 DUT")
-    ratio = np.log10(stationary_ratio(stack))
+    a.set_title("log10 DUT above dark floor")
+    ratio = np.log10(stationary_ratio(stack + np.nanmedian(stack)))  # +floor: no 0/0
     lim = np.nanpercentile(np.abs(ratio), 99)
     b.imshow(ratio, aspect="auto", origin="lower", extent=ext, cmap="RdBu_r",
              vmin=-lim, vmax=lim, interpolation="nearest")
@@ -110,6 +129,9 @@ def _demo() -> None:
     r = stationary_ratio(stack)
     assert np.allclose(r[:, 50], 1)            # stationary
     assert all(r[k, 10 + 3 * k] > 5 for k in range(10))  # moving
+    neg = -(0.01 + 10 * (x == 50))               # negative-volt readout
+    s = above_dark(neg.astype(float))
+    assert s.min() >= 0 and s.argmax() == 50
     print("ok")
 
 
