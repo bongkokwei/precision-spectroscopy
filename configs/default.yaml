@@ -209,15 +209,15 @@ heater:
   channel: 2                    # DG952 output channel (1 or 2)
   load_ohm: 500                 # heater resistance; figure says R_h = 500 Ω
   start_v: 0.0
-  stop_v: 2.0
-  steps: 41                     # voltage points (linspace), ~100 mV per step
+  stop_v: 5.0
+  steps: 101                     # voltage points (linspace), ~100 mV per step
   settle_s: 1.0                 # wait after setting voltage before acquiring
   window_ghz: 20.0              # frequency window around the target resonance
-  target_thz: 189.55           # ≈ 1580 nm; nearest resonance in the cold scan
+  target_thz: 193.41           # ≈ 1580 nm; nearest resonance in the cold scan
   save_all_scans: true         # true keeps every per-step scan.h5 (~1 GB each)
 
 run:
   dir: "data"
-  # dut_name: "aux_ring_3"
-  dut_name: "ring_pm_short"
+  dut_name: "aux_ring_3"
+  # dut_name: "ring_pm_short"
   notes: ""
