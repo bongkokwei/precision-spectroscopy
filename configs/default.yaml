@@ -8,7 +8,7 @@ scope:
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 2.00, offset: -4.0}
     gascell: {ch: 2, scale: 1.00, offset: -6.0}
-    dut:     {ch: 3, scale: 1.00, offset: -2.0}
+    dut:     {ch: 3, scale: 0.50, offset: -2.0}
     trigger: {ch: 4, scale: 5.00, offset:  0.0}
 
 laser:
