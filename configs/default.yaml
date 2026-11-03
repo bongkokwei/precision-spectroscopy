@@ -6,10 +6,10 @@ scope:
   points: 50_000_000          # sample rate = points / duration_s
   memory_depth: 50_000_000  # scope memory depth; must exceed points
   channels:                 # role -> physical channel + vertical setup
-    mzi:     {ch: 1, scale: 2.00, offset: -4.0}
-    gascell: {ch: 2, scale: 1.00, offset: -6.0}
-    dut:     {ch: 3, scale: 0.50, offset: -2.0}
-    trigger: {ch: 4, scale: 5.00, offset:  0.0}
+    mzi:     {ch: 1, scale: 1.00, offset: -3.50}
+    gascell: {ch: 2, scale: 0.50, offset: -5.00}
+    dut:     {ch: 3, scale: 0.50, offset: -1.50}
+    trigger: {ch: 4, scale: 1.00, offset: -3.00}
 
 laser:
   resource: "GPIB0::21::INSTR"
@@ -102,7 +102,7 @@ process:
                               # frequency, before resampling. At 0.5 MHz/sample
                               # that is 20 samples (noise down sqrt(20) ~ 4.5x),
                               # still 20 points across a 200 MHz FWHM
-    baseline_ghz: 20.0        # divide by a rolling baseline over this window:
+    baseline_ghz: null        # divide by a rolling baseline over this window:
                               # far wider than a resonance, far narrower than the
                               # ~3 THz wander from laser power / coupler / polarisation
     baseline_pctile: 90.0     # high percentile so dips don't pull the baseline
@@ -124,7 +124,7 @@ process:
   # Dispersion (scripts/calc_d2.py).
   dispersion:
     ref_nm: 1550.0            # wavelength of mode mu = 0
-    degree: 2
+    degree: 3
     n_mad: 3.0                # fit-residual rejection; the rejects are the
                               # avoided-mode-crossing candidates
     max_iter: 5               # rejection rounds
@@ -225,8 +225,8 @@ heater:
   start_v: 0.0
   stop_v: 5.0
   steps: 101                     # voltage points (linspace), ~100 mV per step
-  settle_s: 1.0                 # wait after setting voltage before acquiring
-  window_ghz: 20.0              # frequency window around the target resonance
+  settle_s: 2.0                 # wait after setting voltage before acquiring
+  window_ghz: 600.0              # frequency window around the target resonance
   target_thz: 193.41           # ≈ 1580 nm; nearest resonance in the cold scan
   save_all_scans: true         # true keeps every per-step scan.h5 (~1 GB each)
 
