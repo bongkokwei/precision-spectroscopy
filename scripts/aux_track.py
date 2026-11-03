@@ -12,7 +12,9 @@ which is valid as long as each step shifts the mode by less than FSR/2.
 Writes <run.dir>/<timestamp>_aux_track/aux_track.h5 after every step, and
 at the end aux_track.png (wrapped detuning against heater power) and
 aux_map.png (every step's full DUT spectrum stacked: heater voltage against
-optical frequency, block-averaged into N_BINS bins over the laser sweep).
+optical frequency, block-averaged into N_BINS bins over the laser sweep, in
+dB). Each step's full-resolution spectrum, in dB, goes to
+spectra/step_<n>_<V>V.png as that step is measured.
 
 The sweep folder holds the one editable config.yaml (step folders get none),
 which spectro.plot.load_h5 falls back to for every step. To re-analyse with
@@ -57,6 +59,26 @@ def edges_hz(cfg: dict) -> np.ndarray:
     c = 299_792_458.0
     lo, hi = c / (cfg["laser"]["stop_nm"] * 1e-9), c / (cfg["laser"]["start_nm"] * 1e-9)
     return np.linspace(lo, hi, N_BINS + 1)
+
+
+def db(y) -> np.ndarray:
+    """10 log10 |y|: the baseline-divided trace may sit at -1 (negative volts)."""
+    with np.errstate(divide="ignore"):
+        return 10 * np.log10(np.abs(y))
+
+
+def _plot_step(freq_hz, dut, out: Path, title: str) -> None:
+    from matplotlib.figure import Figure  # no pyplot: leaves the --show backend alone
+
+    fig = Figure(figsize=(10, 4))
+    ax = fig.subplots()
+    ax.plot(freq_hz / 1e12, db(dut), lw=0.5)
+    ax.set_xlabel("Optical frequency (THz)")
+    ax.set_ylabel("Transmission (dB)")
+    ax.set_title(title)
+    fig.tight_layout()
+    out.parent.mkdir(exist_ok=True)
+    fig.savefig(out, dpi=150)
 
 
 def bin_mean(freq_hz: np.ndarray, dut: np.ndarray, edges: np.ndarray) -> np.ndarray:
@@ -121,11 +143,11 @@ def _plot_map(voltages, edges, rows, out: Path, show: bool, title: str) -> None:
 
     fig, ax = plt.subplots(figsize=(8, 5))
     centres_thz = (edges[:-1] + edges[1:]) / 2e12
-    mesh = ax.pcolormesh(centres_thz, voltages, np.asarray(rows),
+    mesh = ax.pcolormesh(centres_thz, voltages, db(np.asarray(rows)),
                          cmap="inferno", shading="nearest")
     ax.set_xlabel("Optical frequency (THz)")
     ax.set_ylabel("Heater voltage (V)")
-    fig.colorbar(mesh, ax=ax, label="Transmission (baseline-divided)")
+    fig.colorbar(mesh, ax=ax, label="Transmission (dB)")
     ax.set_title(title)
     fig.tight_layout()
     fig.savefig(out, dpi=200, bbox_inches="tight")
@@ -135,10 +157,14 @@ def _plot_map(voltages, edges, rows, out: Path, show: bool, title: str) -> None:
     plt.close(fig)
 
 
-def _analyse(h5_path: Path, edges: np.ndarray) -> tuple[list[dict], np.ndarray]:
-    """One step's resonances and binned spectrum; ([], NaNs) if analysis fails."""
+def _analyse(h5_path: Path, edges: np.ndarray, out_dir: Path, i: int, v: float,
+             title: str) -> tuple[list[dict], np.ndarray]:
+    """One step's resonances and binned spectrum, plus its dB plot under
+    out_dir/spectra; ([], NaNs) if analysis fails."""
     try:
         freq_hz, dut, resonances = ruler.find_resonances(h5_path)
+        _plot_step(freq_hz, dut, out_dir / "spectra" / f"step_{i:03d}_{v:.3f}V.png",
+                   f"{title}  step {i}, {v:.3f} V")
         return resonances, bin_mean(freq_hz, dut, edges)
     except Exception as exc:
         log.error("%s: %s", h5_path, exc)
@@ -177,7 +203,8 @@ def reprocess(sweep_dir: Path, show: bool = False) -> None:
                          f"{sweep_dir}; was save_all_scans off?")
     per_step, rows, edges = [], [], edges_hz(cfg)
     for i, h5_path in enumerate(scans):
-        res, row = _analyse(h5_path, edges)
+        res, row = _analyse(h5_path, edges, sweep_dir, i, voltages[i],
+                            cfg["run"].get("dut_name", ""))
         per_step.append(res)
         rows.append(row)
         log.info("step %d/%d: %d resonance(s), nearest at %+.3f GHz", i + 1,
@@ -243,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
                 ruler.fit_ruler(h5_path)
             except Exception as exc:
                 log.error("step %d ruler fit failed: %s", i + 1, exc)
-            res, row = _analyse(h5_path, edges)
+            res, row = _analyse(h5_path, edges, out_dir, i, v, cfg["run"].get("dut_name", ""))
             per_step.append(res)
             rows.append(row)
             log.info("%d resonance(s), nearest at %+.3f GHz from ref",
@@ -280,6 +307,7 @@ def _demo() -> None:
     row = bin_mean(np.array([1.0, 1.5, 2.5]), np.array([2.0, 4.0, 7.0]),
                    np.array([0.0, 1.0, 2.0, 3.0]))   # first bin empty
     assert np.isnan(row[0]) and np.allclose(row[1:], [3.0, 7.0])
+    assert np.allclose(db([-1.0, 0.1, -0.01]), [0, -10, -20])
     print("ok")
 
 
