@@ -11,8 +11,8 @@ which is valid as long as each step shifts the mode by less than FSR/2.
 
 Writes <run.dir>/<timestamp>_aux_track/aux_track.h5 after every step, and
 at the end aux_track.png (wrapped detuning against heater power) and
-aux_map.png (the DUT spectra stacked: heater voltage against detuning from the
-ref, over heater.window_ghz).
+aux_map.png (every step's full DUT spectrum stacked: heater voltage against
+optical frequency, block-averaged into N_BINS bins over the laser sweep).
 
 The sweep folder holds the one editable config.yaml (step folders get none),
 which spectro.plot.load_h5 falls back to for every step. To re-analyse with
@@ -46,18 +46,25 @@ from spectro import acquire, config, ruler
 log = logging.getLogger(__name__)
 
 FIELDS = ("f0_hz", "fwhm_hz", "q", "amp_hz")
-N_GRID = 2001  # ponytail: fixed map resolution, 10 MHz over the default 20 GHz window
+# ponytail: 20k bins over 1500-1600 nm is ~0.6 GHz each, so a ~0.2 GHz dip is
+# averaged ~3x shallower but still visible; raise it if dips wash out (the h5
+# grows by 4 bytes x steps per bin)
+N_BINS = 20_000
 
 
-def grid_hz(cfg: dict) -> np.ndarray:
-    """Detuning grid of the stacked map: +-heater.window_ghz/2 about the ref."""
-    half = cfg["heater"]["window_ghz"] * 1e9 / 2
-    return np.linspace(-half, half, N_GRID)
+def edges_hz(cfg: dict) -> np.ndarray:
+    """Bin edges of the stacked map: the laser sweep's span, in optical frequency."""
+    c = 299_792_458.0
+    lo, hi = c / (cfg["laser"]["stop_nm"] * 1e-9), c / (cfg["laser"]["start_nm"] * 1e-9)
+    return np.linspace(lo, hi, N_BINS + 1)
 
 
-def window(freq_hz: np.ndarray, dut: np.ndarray, ref_hz: float, grid: np.ndarray) -> np.ndarray:
-    """DUT interpolated onto ref_hz + grid; NaN where the scan does not reach."""
-    return np.interp(ref_hz + grid, freq_hz, dut, left=np.nan, right=np.nan)
+def bin_mean(freq_hz: np.ndarray, dut: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Mean of dut in each frequency bin; NaN where the scan has no samples."""
+    total, _ = np.histogram(freq_hz, edges, weights=dut)
+    count, _ = np.histogram(freq_hz, edges)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return total / count
 
 
 def nearest_detuning(resonances: list[dict], ref_hz: float) -> float:
@@ -80,8 +87,8 @@ def _save(path: Path, voltages, load_ohm, per_step: list[list[dict]], rows, ref_
         f.create_dataset("voltages", data=v)
         f.create_dataset("power_mw", data=v**2 / load_ohm * 1e3)
         f.create_dataset("detuning_hz", data=[nearest_detuning(r, ref_hz) for r in per_step])
-        # stacked spectra: transmission[step, k] at ref_hz + grid_hz[k]
-        f.create_dataset("grid_hz", data=grid_hz(cfg))
+        # stacked spectra: transmission[step, k] is the mean over bin k
+        f.create_dataset("edges_hz", data=edges_hz(cfg))
         f.create_dataset("transmission", data=np.array(rows, dtype=np.float32))
         # one row per resonance; `step` indexes the arrays above
         f.create_dataset("step", data=np.array([i for i, _ in flat], dtype=int))
@@ -107,15 +114,16 @@ def _plot(power_mw, detuning_hz, out: Path, show: bool, title: str) -> None:
     plt.close(fig)
 
 
-def _plot_map(voltages, grid, rows, out: Path, show: bool, title: str) -> None:
+def _plot_map(voltages, edges, rows, out: Path, show: bool, title: str) -> None:
     if not show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    mesh = ax.pcolormesh(grid / 1e9, voltages, np.asarray(rows),
+    centres_thz = (edges[:-1] + edges[1:]) / 2e12
+    mesh = ax.pcolormesh(centres_thz, voltages, np.asarray(rows),
                          cmap="inferno", shading="nearest")
-    ax.set_xlabel("Detuning from ref (GHz)")
+    ax.set_xlabel("Optical frequency (THz)")
     ax.set_ylabel("Heater voltage (V)")
     fig.colorbar(mesh, ax=ax, label="Transmission (baseline-divided)")
     ax.set_title(title)
@@ -127,14 +135,14 @@ def _plot_map(voltages, grid, rows, out: Path, show: bool, title: str) -> None:
     plt.close(fig)
 
 
-def _analyse(h5_path: Path, ref_hz: float, grid: np.ndarray) -> tuple[list[dict], np.ndarray]:
-    """One step's resonances and windowed spectrum; ([], NaNs) if analysis fails."""
+def _analyse(h5_path: Path, edges: np.ndarray) -> tuple[list[dict], np.ndarray]:
+    """One step's resonances and binned spectrum; ([], NaNs) if analysis fails."""
     try:
         freq_hz, dut, resonances = ruler.find_resonances(h5_path)
-        return resonances, window(freq_hz, dut, ref_hz, grid)
+        return resonances, bin_mean(freq_hz, dut, edges)
     except Exception as exc:
         log.error("%s: %s", h5_path, exc)
-        return [], np.full(len(grid), np.nan)  # step kept so indices stay aligned
+        return [], np.full(len(edges) - 1, np.nan)  # step kept so indices stay aligned
 
 
 def _finish(out_dir: Path, voltages, per_step, rows, ref_hz, cfg, show: bool) -> None:
@@ -145,7 +153,7 @@ def _finish(out_dir: Path, voltages, per_step, rows, ref_hz, cfg, show: bool) ->
     _plot(v**2 / load_ohm * 1e3,
           np.array([nearest_detuning(r, ref_hz) for r in per_step]),
           out_dir / "aux_track.png", show, title)
-    _plot_map(v, grid_hz(cfg), rows, out_dir / "aux_map.png", show, title)
+    _plot_map(v, edges_hz(cfg), rows, out_dir / "aux_map.png", show, title)
 
 
 def reprocess(sweep_dir: Path, show: bool = False) -> None:
@@ -167,9 +175,9 @@ def reprocess(sweep_dir: Path, show: bool = False) -> None:
     if len(scans) < len(voltages):
         raise SystemExit(f"{len(voltages)} steps but {len(scans)} scan.h5 under "
                          f"{sweep_dir}; was save_all_scans off?")
-    per_step, rows, grid = [], [], grid_hz(cfg)
+    per_step, rows, edges = [], [], edges_hz(cfg)
     for i, h5_path in enumerate(scans):
-        res, row = _analyse(h5_path, ref_hz, grid)
+        res, row = _analyse(h5_path, edges)
         per_step.append(res)
         rows.append(row)
         log.info("step %d/%d: %d resonance(s), nearest at %+.3f GHz", i + 1,
@@ -220,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
 
     per_step: list[list[dict]] = []
     rows: list[np.ndarray] = []
-    grid = grid_hz(cfg)
+    edges = edges_hz(cfg)
     run_dirs: list[Path] = []
 
     try:
@@ -235,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
                 ruler.fit_ruler(h5_path)
             except Exception as exc:
                 log.error("step %d ruler fit failed: %s", i + 1, exc)
-            res, row = _analyse(h5_path, ref_hz, grid)
+            res, row = _analyse(h5_path, edges)
             per_step.append(res)
             rows.append(row)
             log.info("%d resonance(s), nearest at %+.3f GHz from ref",
@@ -269,9 +277,9 @@ def _demo() -> None:
     assert max(abs(d) for d in det) <= fsr / 2      # wrapped into one FSR
     assert np.allclose(np.unwrap(det, period=fsr), 3e9 + shifts)
     assert np.isnan(nearest_detuning([], ref))
-    f = np.linspace(ref - 5e9, ref + 5e9, 101)      # scan narrower than the window
-    row = window(f, f - ref, ref, np.linspace(-10e9, 10e9, 5))
-    assert np.isnan(row[[0, -1]]).all() and np.allclose(row[1:-1], [-5e9, 0, 5e9])
+    row = bin_mean(np.array([1.0, 1.5, 2.5]), np.array([2.0, 4.0, 7.0]),
+                   np.array([0.0, 1.0, 2.0, 3.0]))   # first bin empty
+    assert np.isnan(row[0]) and np.allclose(row[1:], [3.0, 7.0])
     print("ok")
 
 
