@@ -63,10 +63,21 @@ def sweep_slices(t_s: np.ndarray, trigger: np.ndarray, cfg: dict) -> list[slice]
         len(starts), len(out), n, n * dt_s,
     )
     if len(starts) and not out:
-        log.warning(
-            "every sweep runs past the end of the capture; raise "
-            "scope.duration_s or check laser.speed_nm_s"
-        )
+        if starts[0] >= n:
+            # ponytail: just diagnose; slicing this sweep from sample 0 would put
+            # the nominal-wavelength axis off by the unknown arm latency.
+            log.warning(
+                "a full forward sweep precedes the first trigger edge (at %.2f s): "
+                "its trigger fired before the capture opened, so it has no "
+                "start to anchor to. Capture at least 2x the sweep duration "
+                "plus the flyback so a triggered sweep fits after it",
+                starts[0] * dt_s,
+            )
+        else:
+            log.warning(
+                "every sweep runs past the end of the capture; raise "
+                "scope.duration_s or check laser.speed_nm_s"
+            )
     return out
 
 
@@ -86,6 +97,10 @@ def _demo() -> None:
 
     # A sweep that would overrun the record is dropped, not truncated.
     assert len(sweep_slices(t_s[: 3 * n + 10], trig[: 3 * n + 10], cfg)) == 3
+    # Sweep whose edge preceded the capture, flyback, then a truncated one.
+    late = np.zeros(3 * n // 2)
+    late[6 * n // 5 :] = 4.0
+    assert sweep_slices(t_s[: len(late)], late, cfg) == []
     # No trigger at all -> no sweeps, no exception.
     assert sweep_slices(t_s, np.zeros_like(t_s), cfg) == []
     print("ok")
