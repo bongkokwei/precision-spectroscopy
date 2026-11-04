@@ -43,7 +43,7 @@ import matplotlib
 import numpy as np
 import yaml
 
-from spectro import acquire, config, ruler
+from spectro import acquire, config, heater, ruler
 
 log = logging.getLogger(__name__)
 
@@ -242,26 +242,15 @@ def main(argv: list[str] | None = None) -> int:
     cfg = {**cfg, "run": {**cfg["run"], "dir": str(out_dir)}}
     log.info("output: %s", out_dir)
 
-    from rigol_dg952 import RigolDG952
-
-    def set_heater(v: float, init: bool) -> None:
-        with RigolDG952(h["resource"]) as dg:
-            ch = dg.channel(h["channel"])
-            if init:
-                ch.set_load_ohm(h["load_ohm"])
-            ch.apply_dc(v)
-            if init:
-                ch.output_on()
-
     per_step: list[list[dict]] = []
     rows: list[np.ndarray] = []
     edges = edges_hz(cfg)
     run_dirs: list[Path] = []
 
-    try:
+    with heater.source(h) as set_heater:
         for i, v in enumerate(voltages):
             log.info("--- step %d/%d: %.3f V ---", i + 1, len(voltages), v)
-            set_heater(v, init=(i == 0))
+            set_heater(v)
             time.sleep(h["settle_s"])
             # config_path=None: no per-step config.yaml, so the sweep folder's wins
             h5_path = acquire.run(cfg, config_path=None, restart_scope=False)
@@ -276,12 +265,6 @@ def main(argv: list[str] | None = None) -> int:
             log.info("%d resonance(s), nearest at %+.3f GHz from ref",
                      len(per_step[-1]), nearest_detuning(per_step[-1], ref_hz) / 1e9)
             _save(out_dir / "aux_track.h5", voltages, h["load_ohm"], per_step, rows, ref_hz, cfg)
-    finally:
-        with RigolDG952(h["resource"]) as dg:
-            ch = dg.channel(h["channel"])
-            ch.apply_dc(0.0)
-            ch.output_off()
-            dg.local()
 
     _finish(out_dir, voltages, per_step, rows, ref_hz, cfg, args.show)
 

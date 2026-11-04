@@ -1,6 +1,6 @@
 """Heater-voltage sweep: track one resonance across a DC voltage range.
 
-Sets a DC voltage on a Rigol DG952 (driving a heater), runs the existing
+Sets a DC heater voltage (Rigol DG952 or voltage_ctrl, per heater.driver), runs the existing
 spectro pipeline at each step, extracts a frequency window around one
 resonance, and plots the 2D transmission colormap (figure a).
 
@@ -23,7 +23,7 @@ import matplotlib
 import numpy as np
 import yaml
 
-from spectro import acquire, config, ruler
+from spectro import acquire, config, heater, ruler
 
 log = logging.getLogger(__name__)
 
@@ -134,35 +134,16 @@ def main(argv: list[str] | None = None) -> int:
     # Per-step runs go inside the sweep dir, not as siblings in data/.
     cfg = {**cfg, "run": {**cfg["run"], "dir": str(sweep_dir)}}
 
-    from rigol_dg952 import RigolDG952
-
-    def _set_heater(voltage: float, init: bool = False) -> None:
-        """Open DG952, set DC voltage, close. Output stays latched."""
-        with RigolDG952(h["resource"]) as dg:
-            ch = dg.channel(h["channel"])
-            if init:
-                ch.set_load_ohm(h["load_ohm"])
-            ch.apply_dc(voltage)
-            if init:
-                ch.output_on()
-
-    def _heater_off() -> None:
-        with RigolDG952(h["resource"]) as dg:
-            ch = dg.channel(h["channel"])
-            ch.apply_dc(0.0)
-            ch.output_off()
-            dg.local()
-
     sweep_h5 = sweep_dir / "sweep.h5"
     slices = []
     f0_cold_hz = None
     detuning_grid_hz = None
     run_dirs: list[Path] = []
 
-    try:
+    with heater.source(h) as set_heater:
         for i, v in enumerate(voltages):
             log.info("--- step %d/%d: %.3f V ---", i + 1, len(voltages), v)
-            _set_heater(v, init=(i == 0))
+            set_heater(v)
             time.sleep(h["settle_s"])
 
             h5_path = acquire.run(cfg, config_path=None,  # sweep's config.yaml wins
@@ -204,8 +185,6 @@ def main(argv: list[str] | None = None) -> int:
             )
             _save_progress(sweep_h5, voltages, detuning_grid_hz,
                            slices, f0_cold_hz, cfg)
-    finally:
-        _heater_off()
 
     transmission = np.array(slices, dtype=float)
     tmin, tmax = np.nanmin(transmission), np.nanmax(transmission)
