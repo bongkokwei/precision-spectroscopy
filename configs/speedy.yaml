@@ -220,18 +220,18 @@ gascell:
          P17: 1629.5910, P18: 1630.9860, P19: 1632.4289}
 
 heater:
-  driver: dg952                 # dg952 | voltage_ctrl; only that driver's block is read
+  driver: voltage_ctrl                 # dg952 | voltage_ctrl; only that driver's block is read
   dg952:
     resource: "USB0::0x1AB1::0x0643::DG9A252400191::0::INSTR"
     channel: 2                  # output channel (1 or 2)
   voltage_ctrl:                 # Arduino 12-bit DAC supply (github.com/bongkokwei/voltage-ctrl)
     com_port: "COM3"            # "/dev/ttyUSB0" on Linux
     baud_rate: 9600
-    channel: 8                  # DAC channel wired to the heater
+    channel: 32                  # DAC channel wired to the heater
     v_max: 10.0                 # hard clamp; current limit = 1.1 * V / load_ohm
   load_ohm: 50                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
   start_v: 0.0
-  stop_v: 5.0
+  stop_v: 10.0
   steps: 101                     # voltage points (linspace), ~100 mV per step
   settle_s: 2.0                 # wait after setting voltage before acquiring
   window_ghz: 600.0              # frequency window around the target resonance
