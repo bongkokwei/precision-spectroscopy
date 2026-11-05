@@ -72,11 +72,12 @@ def _configure_scope(scope, cfg: dict) -> list[int]:
         )
     # At >= 50 ms/div the scope auto-enters roll mode, where there is no
     # trigger: SINGle never latches and a free-run keeps the last duration_s.
+    # Numeric only: "OFF" is refused with -120 "Invalid number" (fw 00.02.13).
     if not scope.write_verified(
-        ":TIMebase:ROLL OFF", ":TIMebase:ROLL?", lambda r: r.upper() in ("0", "OFF")
+        ":TIMebase:ROLL 0", ":TIMebase:ROLL?", lambda r: r.upper() in ("0", "OFF")
     ):
         raise RuntimeError(
-            "could not turn off the scope's auto roll mode (:TIMebase:ROLL OFF "
+            "could not turn off the scope's auto roll mode (:TIMebase:ROLL 0 "
             "not confirmed); without it the trigger is ignored at this timebase"
         )
     scope.trigger_edge(scope_cfg["channels"]["trigger"]["ch"], scope_cfg["trigger_level_v"], "POS")
