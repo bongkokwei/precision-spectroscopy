@@ -1,9 +1,11 @@
 """Acquisition: arm the scope, run one laser sweep, store the raw traces.
 
-Synchronisation is software-timed. start_sweep() returns as soon as the SCPI
-command lands and the sweep then runs on the instrument, so the capture window
-opens a few milliseconds into the sweep. That jitter does not matter: the MZI
-ruler defines the frequency axis from the data itself, not from wall-clock time.
+The scope is triggered on the laser's sweep-start pulse rather than
+free-running. A free-run capture keeps the last duration_s before the scope
+stops, which opens ~1 s after start_sweep() -- after the first sweep's trigger
+edge -- so no sweep in the record was both anchored and complete. Instead the
+sweep starts first (it runs continuously) and the scope latches on the next
+rising edge, with PRETRIGGER_S of record before it.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import yaml
 from .config import new_run_dir, sample_rate_hz, setup_logging, sweep_duration_s
 
 log = logging.getLogger(__name__)
+
+PRETRIGGER_S = 0.5  # record kept before the edge; the rest must hold one sweep
 
 
 def _configure_laser(laser, cfg: dict) -> None:
@@ -56,6 +60,19 @@ def _configure_scope(scope, cfg: dict) -> list[int]:
             ch_cfg["scale"],
             ch_cfg["offset"],
         )
+    # Trigger on the sweep-start pulse, edge near the left of the record.
+    # capture() sets the same scale again; it is set here so the offset,
+    # which the scope clamps against the scale, lands after it.
+    duration_s = scope_cfg["duration_s"]
+    post_s = duration_s - PRETRIGGER_S
+    if post_s < sweep_duration_s(cfg):
+        raise ValueError(
+            f"scope.duration_s = {duration_s} s leaves {post_s:.2f} s after the "
+            f"trigger, less than the {sweep_duration_s(cfg):.2f} s sweep"
+        )
+    scope.trigger_edge(scope_cfg["channels"]["trigger"]["ch"], scope_cfg["trigger_level_v"], "POS")
+    scope.timebase_scale(duration_s / 10)
+    scope.timebase_offset(duration_s / 2 - PRETRIGGER_S)  # +ve = trigger left of centre
     return sorted(channels)
 
 
@@ -134,7 +151,9 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
                 duration=scope_cfg["duration_s"],
                 points=scope_cfg["points"],
                 channels=channels,
-                wait_for_trigger=False,
+                wait_for_trigger=True,
+                # up to one sweep + flyback for the next edge, then the record
+                trigger_timeout=2 * sweep_duration_s(cfg) + scope_cfg["duration_s"] + 5,
             )
         finally:
             laser.stop_sweep()
