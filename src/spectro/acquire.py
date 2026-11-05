@@ -70,6 +70,15 @@ def _configure_scope(scope, cfg: dict) -> list[int]:
             f"scope.duration_s = {duration_s} s leaves {post_s:.2f} s after the "
             f"trigger, less than the {sweep_duration_s(cfg):.2f} s sweep"
         )
+    # At >= 50 ms/div the scope auto-enters roll mode, where there is no
+    # trigger: SINGle never latches and a free-run keeps the last duration_s.
+    if not scope.write_verified(
+        ":TIMebase:ROLL OFF", ":TIMebase:ROLL?", lambda r: r.upper() in ("0", "OFF")
+    ):
+        raise RuntimeError(
+            "could not turn off the scope's auto roll mode (:TIMebase:ROLL OFF "
+            "not confirmed); without it the trigger is ignored at this timebase"
+        )
     scope.trigger_edge(scope_cfg["channels"]["trigger"]["ch"], scope_cfg["trigger_level_v"], "POS")
     scope.timebase_scale(duration_s / 10)
     scope.timebase_offset(duration_s / 2 - PRETRIGGER_S)  # +ve = trigger left of centre
