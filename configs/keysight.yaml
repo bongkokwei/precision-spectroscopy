@@ -2,7 +2,7 @@
 
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
-  resource: "USB0::0x2A8D::0x0396::MY12345678::INSTR"  # set to your scope's; rm.list_resources()
+  resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
   duration_s: 20.0          # capture window; must exceed the sweep duration
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 100 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
