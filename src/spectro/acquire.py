@@ -59,6 +59,35 @@ def _configure_scope(scope, cfg: dict) -> list[int]:
     return sorted(channels)
 
 
+def _configure_keysight(scope, cfg: dict) -> list[int]:
+    """DSOX4024A counterpart of _configure_scope; same capture window, same timing."""
+    scope_cfg = cfg["scope"]
+    duration_s = scope_cfg["duration_s"]
+    scope.write(":TIMebase:MODE MAIN")  # roll mode has no trigger for :SINGle to latch
+    # Total memory; the scope splits it per channel pair (4 Mpts -> 2 Mpts each with all four on).
+    scope.write(f":ACQuire:POINts {scope_cfg['memory_depth']}")
+    channels = []
+    for role, ch_cfg in scope_cfg["channels"].items():
+        ch = ch_cfg["ch"]
+        scope.set_channel(ch, scale_v=ch_cfg["scale"], offset_v=ch_cfg["offset"])
+        channels.append(ch)
+        log.info("ch%d = %s (%.3g V/div, offset %.3g V)", ch, role, ch_cfg["scale"], ch_cfg["offset"])
+    # AUTO sweep: digitise(single=True) forces the trigger at once, so the record
+    # starts when the capture is called -- software-timed, as with the Rigol.
+    scope.set_trigger_edge(sweep="AUTO")
+    # ponytail: +position puts the trigger left of centre (whole record after it); flip the sign if a capture shows otherwise
+    scope.set_timebase(duration_s / 10, position_s=duration_s / 2)
+    return sorted(channels)
+
+
+def _capture_keysight(scope, channels: list[int]) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    scope.digitise(*channels, single=True)  # :SINGle: full memory, :DIGitize caps at ~1 Mpts
+    traces = {ch: scope.get_waveform(ch) for ch in channels}
+    t = traces[channels[0]][0]
+    log.info("captured %d points/ch over %.2f s", len(t), t[-1] - t[0])
+    return t, {ch: v for ch, (_, v) in traces.items()}
+
+
 def write_h5(
     path: Path, t: np.ndarray, data: dict[int, np.ndarray], cfg: dict, idn: dict
 ) -> None:
@@ -92,7 +121,6 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
     """Execute one sweep and return the path to the written HDF5 file."""
     # Imported here so processing-only installs work without a VISA stack.
     from agilent_8164b import Agilent8164B
-    from rigol_dho4204 import DHO4204
 
     run_dir = new_run_dir(cfg, config_path)
     setup_logging(run_dir)
@@ -110,38 +138,53 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
         sample_rate_hz(cfg) / 1e6,
     )
 
+    driver = scope_cfg.get("driver", "dho4204")
+    if driver == "dho4204":
+        from rigol_dho4204 import DHO4204
+
+        scope_dev = DHO4204(scope_cfg["resource"])
+    elif driver == "dsox4024a":
+        from keysight_dsox4024a import DSOX4024A
+
+        # digitise(single=True) polls for up to timeout s, so cover the window plus slack.
+        scope_dev = DSOX4024A(scope_cfg["resource"], timeout=scope_cfg["duration_s"] + 30)
+    else:
+        raise ValueError(f"scope.driver must be 'dho4204' or 'dsox4024a', got {driver!r}")
+    keysight = driver == "dsox4024a"
+
     with (
-        DHO4204(
-            scope_cfg["resource"],
-        ) as scope,
+        scope_dev as scope,
         Agilent8164B(
             laser_cfg["resource"],
             slot=laser_cfg["slot"],
             channel=laser_cfg["channel"],
         ) as laser,
     ):
-        idn = {"scope": scope.idn(), "laser": laser.identify()}
+        idn = {"scope": scope.identify() if keysight else scope.idn(), "laser": laser.identify()}
         log.info("scope: %s", idn["scope"])
         log.info("laser: %s", idn["laser"])
 
-        channels = _configure_scope(scope, cfg)
+        channels = (_configure_keysight if keysight else _configure_scope)(scope, cfg)
         _configure_laser(laser, cfg)
 
         laser.laser_on()
         try:
             laser.start_sweep()
-            t, data = scope.capture(
-                duration=scope_cfg["duration_s"],
-                points=scope_cfg["points"],
-                channels=channels,
-                wait_for_trigger=False,
-            )
+            if keysight:
+                t, data = _capture_keysight(scope, channels)
+            else:
+                t, data = scope.capture(
+                    duration=scope_cfg["duration_s"],
+                    points=scope_cfg["points"],
+                    channels=channels,
+                    wait_for_trigger=False,
+                )
         finally:
             laser.stop_sweep()
             laser.laser_off()
 
         scope.screenshot(str(run_dir / "screenshot.png"))
-        if restart_scope:
+        if restart_scope and not keysight:
             # The scope's front end gets unreliable after a multi-gigabyte readout.
             scope.system_restart()
 

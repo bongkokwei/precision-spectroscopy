@@ -4,7 +4,8 @@ Swept-wavelength spectroscopy of a DUT, with a fibre-MZI auxiliary
 interferometer supplying the frequency axis.
 
 A tunable laser (Agilent/Keysight 8164B) sweeps continuously while a
-four-channel scope (Rigol DHO4204) records the MZI fringes, an HCN/CO gas
+four-channel scope (Rigol DHO4204, or Keysight DSOX4024A with `scope.driver: dsox4024a`;
+see `configs/keysight.yaml`) records the MZI fringes, an HCN/CO gas
 cell, the DUT transmission and a trigger line. The MZI fringes — not the
 laser's own wavelength readout — define the frequency axis, so sweep
 nonlinearity does not matter.
@@ -12,7 +13,7 @@ nonlinearity does not matter.
 ## Install
 
 ```bash
-pip install -e ".[hw,dev]"   # hw pulls the two instrument drivers from GitHub
+pip install -e ".[hw,dev]"   # hw pulls the instrument drivers from GitHub
 pip install -e ".[dev]"      # processing only, no VISA stack needed
 ```
 
