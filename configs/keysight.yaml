@@ -10,10 +10,11 @@ scope:
     level_v: 1.5
     slope: POSitive         # POSitive | NEGative
   channels:                 # role -> physical channel + vertical setup
-    mzi:     {ch: 1, scale: 1.00, offset: -3.50}
-    gascell: {ch: 2, scale: 0.50, offset: -5.00}
-    dut:     {ch: 3, scale: 0.50, offset: -1.50}
-    trigger: {ch: 4, scale: 1.00, offset: -3.00}
+    # Keysight offset = the voltage at screen centre, so the sign is the opposite of the Rigol's
+    mzi:     {ch: 1, scale: 1.00, offset: 3.50}
+    gascell: {ch: 2, scale: 0.50, offset: 5.00}
+    dut:     {ch: 3, scale: 0.50, offset: 1.50}
+    trigger: {ch: 4, scale: 1.00, offset: 3.00}
 
 laser:
   resource: "GPIB0::21::INSTR"
