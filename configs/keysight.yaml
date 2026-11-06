@@ -6,6 +6,9 @@ scope:
   duration_s: 20.0          # capture window; must exceed the sweep duration
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 100 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
+  trigger:                  # edge on channels.trigger (laser sweep-start TTL), NORMal sweep
+    level_v: 1.5
+    slope: POSitive         # POSitive | NEGative
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 1.00, offset: -3.50}
     gascell: {ch: 2, scale: 0.50, offset: -5.00}

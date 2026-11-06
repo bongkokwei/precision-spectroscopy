@@ -20,6 +20,8 @@ from .config import new_run_dir, sample_rate_hz, setup_logging, sweep_duration_s
 
 log = logging.getLogger(__name__)
 
+PRETRIGGER_S = 0.5  # DSOX4024A record kept before the trigger edge
+
 
 def _configure_laser(laser, cfg: dict) -> None:
     laser_cfg = cfg["laser"]
@@ -72,16 +74,25 @@ def _configure_keysight(scope, cfg: dict) -> list[int]:
         scope.set_channel(ch, scale_v=ch_cfg["scale"], offset_v=ch_cfg["offset"])
         channels.append(ch)
         log.info("ch%d = %s (%.3g V/div, offset %.3g V)", ch, role, ch_cfg["scale"], ch_cfg["offset"])
-    # AUTO sweep: digitise(single=True) forces the trigger at once, so the record
-    # starts when the capture is called -- software-timed, as with the Rigol.
-    scope.set_trigger_edge(sweep="AUTO")
-    # ponytail: +position puts the trigger left of centre (whole record after it); flip the sign if a capture shows otherwise
-    scope.set_timebase(duration_s / 10, position_s=duration_s / 2)
+    # Trigger on the laser's sweep-start TTL, edge PRETRIGGER_S into the record so
+    # sweeps.rising_edges sees the low-to-high step and a full sweep after it.
+    post_s = duration_s - PRETRIGGER_S
+    if post_s < sweep_duration_s(cfg):
+        raise ValueError(
+            f"scope.duration_s = {duration_s} s leaves {post_s:.2f} s after the "
+            f"trigger, less than the {sweep_duration_s(cfg):.2f} s sweep"
+        )
+    trig_ch = scope_cfg["channels"]["trigger"]["ch"]
+    trig = scope_cfg["trigger"]
+    scope.set_trigger_edge(f"CHANnel{trig_ch}", trig["level_v"], trig["slope"], sweep="NORMal")
+    # ponytail: +position puts the trigger left of centre; flip the sign if the edge lands late in the record
+    scope.set_timebase(duration_s / 10, position_s=duration_s / 2 - PRETRIGGER_S)
+    scope.check_error()  # a refused setting otherwise only shows up as a timeout
     return sorted(channels)
 
 
 def _capture_keysight(scope, channels: list[int]) -> tuple[np.ndarray, dict[int, np.ndarray]]:
-    scope.digitise(*channels, single=True)  # :SINGle: full memory, :DIGitize caps at ~1 Mpts
+    scope.digitise(*channels, single=True)  # :SINGle: full memory; waits for the CH trigger edge
     traces = {ch: scope.get_waveform(ch) for ch in channels}
     t = traces[channels[0]][0]
     log.info("captured %d points/ch over %.2f s", len(t), t[-1] - t[0])
@@ -146,8 +157,11 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
     elif driver == "dsox4024a":
         from keysight_dsox4024a import DSOX4024A
 
-        # digitise(single=True) polls for up to timeout s, so cover the window plus slack.
-        scope_dev = DSOX4024A(scope_cfg["resource"], timeout=scope_cfg["duration_s"] + 30)
+        # The sweep starts before the scope arms and repeats (cycles: 0), so wait up to
+        # one sweep + flyback for the next edge, then the record, plus slack.
+        scope_dev = DSOX4024A(
+            scope_cfg["resource"], timeout=2 * sweep_duration_s(cfg) + scope_cfg["duration_s"] + 30
+        )
     else:
         raise ValueError(f"scope.driver must be 'dho4204' or 'dsox4024a', got {driver!r}")
     keysight = driver == "dsox4024a"

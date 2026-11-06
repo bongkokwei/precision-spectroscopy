@@ -41,10 +41,12 @@ def test_keysight_run(monkeypatch, tmp_path):
     acquire.run(yaml.safe_load(CFG.read_text()))
 
     names = [c[0] for c in calls]
-    assert calls[0] == ("open", 50.0)
+    assert calls[0] == ("open", 70.0)
     assert names.index("start_sweep") < names.index("digitise") < names.index("stop_sweep")
     assert next(c for c in calls if c[0] == "digitise") == ("digitise", (1, 2, 3, 4), {"single": True})
-    assert ("set_timebase", (2.0,), {"position_s": 10.0}) in calls
+    assert ("set_timebase", (2.0,), {"position_s": 9.5}) in calls
+    assert ("set_trigger_edge", ("CHANnel4", 1.5, "POSitive"), {"sweep": "NORMal"}) in calls
+    assert "check_error" in names
     assert "system_restart" not in names
     assert written["idn"]["scope"].startswith("KEYSIGHT")
     assert sorted(written["d"]) == [1, 2, 3, 4] and written["d"][3][0] == 3.0
