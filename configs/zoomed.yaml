@@ -2,10 +2,9 @@
 
 scope:
   resource: "USB0::0x1AB1::0x0610::HDO4A261600266::INSTR"
-  duration_s: 2.0          # capture window; must exceed the sweep + 0.5 s pre-trigger
+  duration_s: 2.0          # capture window; must exceed the sweep duration
   points: 5000000          # sample rate = points / duration_s
   memory_depth: "5M"
-  trigger_level_v: 1.5      # edge level on the trigger channel (laser TTL out)
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 2.00, offset: -4.0}
     gascell: {ch: 2, scale: 2.00, offset: -8.0}
