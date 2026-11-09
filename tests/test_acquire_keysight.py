@@ -22,6 +22,7 @@ def test_keysight_run(monkeypatch, tmp_path):
         def __getattr__(self, name): return lambda *a, **kw: calls.append((name, a, kw))
         def identify(self): return "KEYSIGHT,DSO-X 4024A"
         def get_waveform(self, ch): return np.arange(5.0), np.full(5, float(ch))
+        def query(self, cmd): return "1.0E+05"
 
     class Laser:
         def __init__(self, *a, **kw): pass
@@ -47,6 +48,7 @@ def test_keysight_run(monkeypatch, tmp_path):
     assert ("set_timebase", (2.0,), {"position_s": 9.5}) in calls
     assert ("set_trigger_edge", ("CHANnel4", 1.5, "POSitive"), {"sweep": "NORMal"}) in calls
     assert "check_error" in names
+    assert ("write", (":ACQuire:SRATe 100000",), {}) in calls
     assert "system_restart" not in names
     assert written["idn"]["scope"].startswith("KEYSIGHT")
     assert sorted(written["d"]) == [1, 2, 3, 4] and written["d"][3][0] == 3.0
