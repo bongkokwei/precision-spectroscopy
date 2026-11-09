@@ -68,6 +68,10 @@ def _configure_keysight(scope, cfg: dict) -> list[int]:
     scope.write(":TIMebase:MODE MAIN")  # roll mode has no trigger for :SINGle to latch
     # Total memory; the scope splits it per channel pair (4 Mpts -> 2 Mpts each with all four on).
     scope.write(f":ACQuire:POINts {scope_cfg['memory_depth']}")
+    # A numeric :POINts enters Digitizer mode, where the record is points / sample rate
+    # and the timebase no longer sets the rate. Without this the previous rate stays
+    # (1.25 GSa/s seen: 2 Mpts -> 1.6 ms record, shown as 160 us/div), not duration_s.
+    scope.write(f":ACQuire:SRATe {scope_cfg['points'] / duration_s:g}")
     channels = []
     for role, ch_cfg in scope_cfg["channels"].items():
         ch = ch_cfg["ch"]
@@ -88,6 +92,14 @@ def _configure_keysight(scope, cfg: dict) -> list[int]:
     # ponytail: +position puts the trigger left of centre; flip the sign if the edge lands late in the record
     scope.set_timebase(duration_s / 10, position_s=duration_s / 2 - PRETRIGGER_S)
     scope.check_error()  # a refused setting otherwise only shows up as a timeout
+    rate = float(scope.query(":ACQuire:SRATe?"))  # the scope rounds to a rate it supports
+    record_s = scope_cfg["points"] / rate
+    log.info("DSOX4024A: %.4g Sa/s, %.3g s record", rate, record_s)
+    if record_s < PRETRIGGER_S + sweep_duration_s(cfg):
+        raise ValueError(
+            f"scope record is {record_s:.3g} s at {rate:.4g} Sa/s, shorter than the "
+            f"{PRETRIGGER_S + sweep_duration_s(cfg):.2f} s pretrigger + sweep"
+        )
     return sorted(channels)
 
 
