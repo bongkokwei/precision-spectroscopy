@@ -8,7 +8,7 @@
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
   resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
-  duration_s: 12.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
+  duration_s: 11.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
                             # Was 20 s, which spent half the record on flyback
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 182 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
@@ -124,7 +124,7 @@ process:
     expected_fwhm_hz: 2.0e+8  # order of magnitude only, the real linewidth
                               # comes out of the fit. 200 MHz matches the
                               # 20260813 ring (185-266 MHz over 125 modes)
-    snr: 100.0                # much higher than anchors.snr: this ring's
+    snr: 50.0                # much higher than anchors.snr: this ring's
                               # resonances stand ~400x the sample noise, so a
                               # low threshold finds noise inside their wings
     window_fwhm: 4.0          # fit half-window = this many expected FWHM ...
@@ -230,18 +230,18 @@ gascell:
          P17: 1629.5910, P18: 1630.9860, P19: 1632.4289}
 
 heater:
-  driver: dg952                 # dg952 | voltage_ctrl; only that driver's block is read
+  driver: voltage_ctrl                 # dg952 | voltage_ctrl; only that driver's block is read
   dg952:
     resource: "USB0::0x1AB1::0x0643::DG9A252400191::0::INSTR"
     channel: 2                  # output channel (1 or 2)
   voltage_ctrl:                 # Arduino 12-bit DAC supply (github.com/bongkokwei/voltage-ctrl)
     com_port: "COM3"            # "/dev/ttyUSB0" on Linux
     baud_rate: 9600
-    channel: 8                  # DAC channel wired to the heater
+    channel: 32                  # DAC channel wired to the heater
     v_max: 10.0                 # hard clamp; current limit = 1.1 * V / load_ohm
   load_ohm: 50                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
   start_v: 0.0
-  stop_v: 5.0
+  stop_v: 10.0
   steps: 101                     # voltage points (linspace), ~100 mV per step
   settle_s: 2.0                 # wait after setting voltage before acquiring
   window_ghz: 600.0              # frequency window around the target resonance
