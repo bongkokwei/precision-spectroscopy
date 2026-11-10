@@ -8,7 +8,7 @@
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
   resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
-  duration_s: 11.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
+  duration_s: 12.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
                             # Was 20 s, which spent half the record on flyback
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 182 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
@@ -141,7 +141,7 @@ process:
     max_iter: 5               # rejection rounds
     amp_n_mad: 5.0            # low-amplitude fit-failure rejection, before
                               # mode numbers are assigned
-    amx_floor_hz: 150.0e+6  # 150 MHz absolute floor
+    amx_floor_hz: 30.0e+6  # 150 MHz absolute floor
 
 gascell:
   # Wavelength References tri-gas cell, 80 cm multi-pass (H(80) housing).
@@ -250,6 +250,6 @@ heater:
 
 run:
   dir: "data"
-  dut_name: "aux_ring_3"
+  dut_name: "aux_ring_1"
   # dut_name: "ring_pm_short"
   notes: ""

@@ -130,7 +130,7 @@ process:
     max_iter: 5               # rejection rounds
     amp_n_mad: 5.0            # low-amplitude fit-failure rejection, before
                               # mode numbers are assigned
-    amx_floor_hz: 150.0e+6  # 150 MHz absolute floor
+    amx_floor_hz: 30.0e+6  # 150 MHz absolute floor
 
 gascell:
   # Wavelength References tri-gas cell, 80 cm multi-pass (H(80) housing).
