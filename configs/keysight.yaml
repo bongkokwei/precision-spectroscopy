@@ -3,8 +3,9 @@
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
   resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
-  duration_s: 20.0          # capture window; must exceed the sweep duration
-  points: 2_000_000         # per channel; sample rate = points / duration_s (here 100 kS/s)
+  duration_s: 11.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
+                            # Was 20 s, which spent half the record on flyback
+  points: 2_000_000         # per channel; sample rate = points / duration_s (here 182 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
   trigger:                  # edge on channels.trigger (laser sweep-start TTL), NORMal sweep
     level_v: 1.5
