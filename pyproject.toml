@@ -20,6 +20,7 @@ dependencies = [
 hw = [
     "agilent-8164b @ git+https://github.com/bongkokwei/agilent-8164b",
     "rigol-dho4204 @ git+https://github.com/bongkokwei/rigol_dho4204",
+    "keysight-dsox4024a @ git+https://github.com/bongkokwei/keysight-dsox4024a",
     "rigol-dg952 @ git+https://github.com/bongkokwei/rigol-dg952.git",
     "voltage-ctrl @ git+https://github.com/bongkokwei/voltage-ctrl",
 ]
