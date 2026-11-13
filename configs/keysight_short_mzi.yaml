@@ -8,7 +8,7 @@
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
   resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
-  duration_s: 11.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
+  duration_s: 25          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
                             # Was 20 s, which spent half the record on flyback
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 182 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
@@ -28,7 +28,7 @@ laser:
   start_nm: 1500.0
   stop_nm: 1600.0
   cycles: 0
-  speed_nm_s: 10.0
+  speed_nm_s: 5.0
   power: 12.0
   power_unit: "dBm"         # dBm | mW | uW | nW
   output_path: "high"       # high | lowsse | both_high | both_low
@@ -95,7 +95,7 @@ process:
     degree: 2                 # 3-4 buy nothing over a quadratic: measured
                               # 88.9-89.6 MHz RMS vs 90.2, the catalogue's own
                               # accuracy
-    max_j: 20                 # drop max_j_species lines above this |J|
+    max_j: 10                 # drop max_j_species lines above this |J|
     max_j_species: "H12C14N"  # only this catalogue's error doubles with |J|
                               # (SRM 2519a cross-check); null disables the cut
     slip_frac: 0.5            # phase slip = fringe rate off its local median by
@@ -116,7 +116,7 @@ process:
                               # frequency, before resampling. At 0.5 MHz/sample
                               # that is 20 samples (noise down sqrt(20) ~ 4.5x),
                               # still 20 points across a 200 MHz FWHM
-    baseline_ghz: 10.0        # divide by a rolling baseline over this window:
+    baseline_ghz: null        # divide by a rolling baseline over this window:
                               # far wider than a resonance, far narrower than the
                               # ~3 THz wander from laser power / coupler / polarisation
     baseline_pctile: 90.0     # high percentile so dips don't pull the baseline
