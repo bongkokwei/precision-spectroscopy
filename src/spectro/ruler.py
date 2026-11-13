@@ -135,6 +135,33 @@ def phase_rad(
     return phi
 
 
+def find_slips(
+    phi: np.ndarray, fs_hz: float, frac: float = 0.5, edge_frac: float = 0.02
+) -> list[float]:
+    """Phases at which the MZI phase lost or gained fringes, in radians.
+
+    A slip is where the instantaneous fringe rate leaves frac of its local
+    median: the fringe contrast fading to zero (polarisation beat in a non-PM
+    fibre MZI) or a laser glitch. Both throw a whole number of fringes -- tens
+    to hundreds -- into phi, a step no polynomial nu(phi) can follow. Flagged
+    samples closer than 1 ms are one event. The first and last edge_frac of
+    the record are skipped: that is Hilbert ringing, trimmed downstream anyway.
+    """
+    rate = np.diff(phi)
+    blk = 4096  # ponytail: block median as the reference rate; ~20 ms at 182 kS/s
+    nb = max(len(rate) // blk, 1)
+    ref_b = np.median(rate[: nb * blk].reshape(nb, -1), axis=1)
+    ref = np.interp(np.arange(len(rate)), (np.arange(nb) + 0.5) * blk, ref_b)
+    bad = np.flatnonzero(np.abs(rate - ref) > frac * np.abs(ref))
+    k = int(len(phi) * edge_frac)
+    bad = bad[(bad > k) & (bad < len(phi) - 1 - k)]
+    if not len(bad):
+        return []
+    events = np.split(bad, np.flatnonzero(np.diff(bad) > fs_hz * 1e-3) + 1)
+    # The phase just after the event: every sample past it carries the offset.
+    return [float(phi[min(e[-1] + 1, len(phi) - 1)]) for e in events]
+
+
 def mzi_spectrogram(
     mzi: np.ndarray,
     fs_hz: float,
@@ -571,6 +598,7 @@ def fit_nu_phi(
     cfg: dict,
     degree: int | None = None,
     max_j: int | None = None,
+    slips_rad: list[float] = (),
 ) -> dict:
     """Fit nu(phi) through gas-cell anchors (step 4).
 
@@ -591,10 +619,15 @@ def fit_nu_phi(
             that the run folder records what the fit was made with.
         max_j: Lines of process.ruler.max_j_species with |J| (the digits in the
             branch label) above this are excluded; None takes the config's.
+        slips_rad: Phases where the MZI phase slipped (find_slips). Each one
+            adds a free step to the model, nu = poly(phi) + sum s_k*[phi >= phi_k],
+            so a slip costs one parameter instead of wrecking the whole fit.
+            A slip with no anchor on one side is dropped: its step is not
+            determined, and the stretch beyond it is extrapolation anyway.
 
     Returns:
         {"coeffs": [...], "domain": [lo, hi], "degree", "rms_hz", "n_anchors",
-        "dropped_high_j"}. coeffs are numpy.polynomial.Polynomial coefficients
+        "dropped_high_j", "steps": [[phi_k, step_hz], ...]}. coeffs are numpy.polynomial.Polynomial coefficients
         over the given domain, not a bare power series -- a raw
         numpy.polyfit/polyval on phi (order 1e6-1e7 rad here) is badly
         conditioned; recover the axis with nu_hz(phi_rad, fit).
@@ -622,12 +655,24 @@ def fit_nu_phi(
     # Polynomial.fit wants 1/sigma, not 1/sigma**2, for Gaussian uncertainties.
     w = np.array([1.0 / accuracy_pm.get(a["species"], 1.0) for a in kept], dtype=float)
 
-    poly = np.polynomial.Polynomial.fit(phi, nu, degree, w=w)
-    resid = nu - poly(phi)
+    slips = sorted(
+        s for s in slips_rad if np.any(phi < s) and np.any(phi >= s)
+    )
+    # Same basis Polynomial.fit uses (domain mapped onto [-1, 1]) so the coeffs
+    # stay readable by nu_hz; the step columns are just appended to it.
+    domain = [float(phi.min()), float(phi.max())]
+    x = (2.0 * phi - domain[0] - domain[1]) / (domain[1] - domain[0])
+    a = np.column_stack(
+        [np.polynomial.polynomial.polyvander(x, degree)]
+        + [(phi >= s).astype(float) for s in slips]
+    )
+    sol = np.linalg.lstsq(a * w[:, None], nu * w, rcond=None)[0]
+    resid = nu - a @ sol
 
     return {
-        "coeffs": poly.coef.tolist(),
-        "domain": poly.domain.tolist(),
+        "coeffs": sol[: degree + 1].tolist(),
+        "domain": domain,
+        "steps": [[s, float(h)] for s, h in zip(slips, sol[degree + 1 :])],
         "degree": degree,
         "rms_hz": float(np.sqrt(np.mean(resid**2))),
         "n_anchors": len(kept),
@@ -637,7 +682,10 @@ def fit_nu_phi(
 
 def nu_hz(phi_rad, fit: dict):
     """Evaluate a fit_nu_phi() result at arbitrary phi -- step 5's entry point."""
-    return np.polynomial.Polynomial(fit["coeffs"], domain=fit["domain"])(phi_rad)
+    nu = np.polynomial.Polynomial(fit["coeffs"], domain=fit["domain"])(phi_rad)
+    for phi_k, step_hz in fit.get("steps", []):
+        nu = nu + step_hz * (np.asarray(phi_rad) >= phi_k)
+    return nu
 
 
 def fit_ruler(
@@ -683,7 +731,17 @@ def fit_ruler(
         anchors, band_hz = gas_anchors(h5_path, sweep, bandpass_hz=bandpass_hz)
     _, _, cfg = load_h5(h5_path, roles=())  # attrs only; no channel is read
 
-    fit = fit_nu_phi(anchors, cfg)
+    slip_frac = config.params(cfg, "ruler")["slip_frac"]
+    slips = []
+    if slip_frac:
+        t_s, phi, _, _ = sweep_phase(h5_path, sweep, band_hz)
+        slips = find_slips(
+            phi, 1.0 / float(t_s[1] - t_s[0]), slip_frac,
+            config.params(cfg, "spectrum")["trim_frac"],
+        )
+    fit = fit_nu_phi(anchors, cfg, slips_rad=slips)
+    for phi_k, step_hz in fit["steps"]:
+        log.info("sweep %d: phase slip at %.4f Mrad, step %+.2f GHz", sweep, phi_k / 1e6, step_hz / 1e9)
 
     used = {
         # Resolved numbers, never the word "auto" -- unless the anchors came from
@@ -704,6 +762,7 @@ def fit_ruler(
         grp.attrs["rms_hz"] = fit["rms_hz"]
         grp.attrs["n_anchors"] = fit["n_anchors"]
         grp.attrs["dropped_high_j"] = fit["dropped_high_j"]
+        grp.attrs["steps"] = np.asarray(fit["steps"], dtype=float).reshape(-1, 2)
         grp.attrs["params_yaml"] = yaml.safe_dump(used, sort_keys=False)
 
     log.info(
@@ -736,6 +795,7 @@ def read_ruler_fit(h5_path: str | Path, sweep: int = 0) -> dict:
             "rms_hz": float(grp.attrs["rms_hz"]),
             "n_anchors": int(grp.attrs["n_anchors"]),
             "dropped_high_j": int(grp.attrs["dropped_high_j"]),
+            "steps": np.asarray(grp.attrs.get("steps", np.zeros((0, 2)))).tolist(),
             "params": yaml.safe_load(grp.attrs.get("params_yaml", "{}")),
         }
 
