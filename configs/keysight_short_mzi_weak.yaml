@@ -98,6 +98,9 @@ process:
     max_j: 20                 # drop max_j_species lines above this |J|
     max_j_species: "H12C14N"  # only this catalogue's error doubles with |J|
                               # (SRM 2519a cross-check); null disables the cut
+    slip_frac: 0.5            # phase slip = fringe rate off its local median by
+                              # this fraction (contrast fade, laser glitch); each
+                              # one gets a free step in nu(phi). null disables
 
   # Step 5: the DUT on an absolute frequency axis.
   spectrum:

@@ -289,6 +289,27 @@ def test_fit_nu_phi_recovers_a_known_quadratic():
     assert np.allclose(nu_hz(probe, fit), np.polyval(true_coeffs, probe), atol=1.0e5)
 
 
+def test_phase_slip_is_found_and_absorbed_as_a_step():
+    """A 100-fringe slip mid-sweep: find_slips locates it, and fit_nu_phi with
+    that slip fits as cleanly as a slip-free record, where a bare polynomial
+    is left gigahertz off."""
+    fs, fsr = 1.0e5, 40.8e6
+    phi_true = 2 * np.pi * 3.0e4 * np.arange(200_000) / fs  # 30 kHz fringes, 2 s
+    phi = phi_true.copy()
+    phi[100_000:] += 2 * np.pi * 100  # 100 fringes thrown in at one sample
+    slips = ruler.find_slips(phi, fs)
+    assert len(slips) == 1 and abs(slips[0] - phi[100_000]) < 2 * np.pi
+
+    idx = np.linspace(5_000, 195_000, 40).astype(int)
+    nu = 1.94e14 - fsr * phi_true[idx] / (2 * np.pi)
+    plain = fit_nu_phi(_anchors(phi[idx], nu), FIT_CFG)
+    fixed = fit_nu_phi(_anchors(phi[idx], nu), FIT_CFG, slips_rad=slips)
+    assert plain["rms_hz"] > 5.0e8
+    assert fixed["rms_hz"] < 1.0e5
+    assert abs(fixed["steps"][0][1] - 100 * fsr) < 1.0e6
+    assert np.allclose(nu_hz(phi[idx], fixed), nu, atol=1.0e5)
+
+
 def test_fit_nu_phi_drops_high_j_h12c14n_but_keeps_low_j():
     anchors = _anchors([0.0, 1.0], [1.0e14, 1.1e14], species="H12C14N", label="P25")
     anchors += _anchors([2.0], [1.2e14], species="H12C14N", label="R5")
