@@ -18,7 +18,7 @@ scope:
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 1.00, offset: 3.50}
     gascell: {ch: 2, scale: 0.50, offset: 4.50}
-    dut:     {ch: 3, scale: 0.50, offset: 0.30}
+    dut:     {ch: 3, scale: 0.50, offset: 1.50}
     trigger: {ch: 4, scale: 5.00, offset: 0.00}
 
 laser:
@@ -113,7 +113,7 @@ process:
                               # frequency, before resampling. At 0.5 MHz/sample
                               # that is 20 samples (noise down sqrt(20) ~ 4.5x),
                               # still 20 points across a 200 MHz FWHM
-    baseline_ghz: null        # divide by a rolling baseline over this window:
+    baseline_ghz: 10.0        # divide by a rolling baseline over this window:
                               # far wider than a resonance, far narrower than the
                               # ~3 THz wander from laser power / coupler / polarisation
     baseline_pctile: 90.0     # high percentile so dips don't pull the baseline
@@ -250,6 +250,6 @@ heater:
 
 run:
   dir: "data"
-  dut_name: "aux_ring_3"
-  # dut_name: "ring_pm_short"
+  # dut_name: "aux_ring_2"
+  dut_name: "ring_pm_short"
   notes: ""
