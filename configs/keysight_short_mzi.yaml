@@ -239,7 +239,7 @@ heater:
     baud_rate: 9600
     channel: 32                  # DAC channel wired to the heater
     v_max: 10.0                 # hard clamp; current limit = 1.1 * V / load_ohm
-  load_ohm: 50                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
+  load_ohm: 6                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
   start_v: 0.0
   stop_v: 10.0
   steps: 101                     # voltage points (linspace), ~100 mV per step
@@ -250,6 +250,6 @@ heater:
 
 run:
   dir: "data"
-  dut_name: "aux_ring_1"
+  dut_name: "aux_ring_3"
   # dut_name: "ring_pm_short"
   notes: ""
