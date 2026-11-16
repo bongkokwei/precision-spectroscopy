@@ -379,6 +379,13 @@ def plot_gas(
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
 
+    # Frequency twin axis on top
+    c_nm_hz = 299792458.0 * 1e9  # speed of light in nm/Hz
+    ax_top = axes[0].twiny()
+    lam_lo, lam_hi = axes[0].get_xlim()  # nm
+    ax_top.set_xlim(c_nm_hz / lam_lo / 1e12, c_nm_hz / lam_hi / 1e12)
+    ax_top.set_xlabel("Frequency (THz)")
+
     fig.suptitle(
         f"{h5_path.parent.name}  sweep {sweep}  {len(anchors)} anchors", fontsize=10
     )
@@ -465,6 +472,13 @@ def plot_resonances(
         ax.margins(x=0.005)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
+
+    # Wavelength twin axis on top
+    c_nm_hz = 299792458.0 * 1e9  # speed of light in nm/Hz
+    ax_top = axes[0].twiny()
+    f_lo, f_hi = axes[0].get_xlim()  # THz
+    ax_top.set_xlim(c_nm_hz / (f_lo * 1e12), c_nm_hz / (f_hi * 1e12))
+    ax_top.set_xlabel("Wavelength (nm)")
 
     fig.suptitle(
         f"{h5_path.parent.name}  sweep {sweep}  {len(resonances)} resonance(s)",

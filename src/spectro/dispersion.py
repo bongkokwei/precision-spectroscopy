@@ -392,6 +392,16 @@ def plot_dispersion(
     ax.grid(True, alpha=0.25, lw=0.5)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
+
+    # Wavelength twin axis on top
+    c_nm_s = 299792458.0 * 1e9  # speed of light in nm/s
+    ax2 = ax.twiny()
+    mu_min, mu_max = ax.get_xlim()
+    f_at_min = f_ref + d1 * mu_min
+    f_at_max = f_ref + d1 * mu_max
+    ax2.set_xlim(c_nm_s / f_at_min, c_nm_s / f_at_max)
+    ax2.set_xlabel("Wavelength (nm)")
+
     fig.suptitle(
         f"Integrated dispersion  --  D2/2π = {fit['d2_hz'] / 1e3:.1f} kHz/μ², "
         f"FSR = {fit['d1_hz'] / 1e9:.3f} GHz",
