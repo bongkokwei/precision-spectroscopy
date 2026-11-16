@@ -16,8 +16,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="acquire one sweep")
     p_run.add_argument("config", help="path to the YAML config")
     p_run.add_argument(
-        "--fit", action="store_true",
-        help="also build the frequency ruler for sweep 0 straight after the capture",
+        "--no-fit", action="store_true",
+        help="skip the frequency-ruler fit after capture (default: fit automatically)",
     )
 
     p_check = sub.add_parser("check", help="validate a config without touching hardware")
@@ -129,16 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import acquire  # deferred: needs the VISA drivers
         from . import plot
 
-        # Acquire only. The raw record still holds the parked-laser regions at
-        # both ends, and how to trim them is not settled -- so building the
-        # frequency ruler (`spectro fit`) stays a separate, explicit step
-        # rather than running on every capture (opt in with --fit). A raw
-        # plot is cheap and is the first thing you look at, so it runs here.
         cfg = config.load(args.config)
         h5_path = acquire.run(cfg, config_path=args.config)
         print(h5_path)
         print(plot.plot_scan(h5_path))
-        if args.fit:
+        if not args.no_fit:
             run_fit(h5_path)
         return 0
 
