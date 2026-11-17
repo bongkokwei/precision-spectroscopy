@@ -95,7 +95,7 @@ process:
     degree: 2                 # 3-4 buy nothing over a quadratic: measured
                               # 88.9-89.6 MHz RMS vs 90.2, the catalogue's own
                               # accuracy
-    max_j: 10                 # drop max_j_species lines above this |J|
+    max_j: 20                 # drop max_j_species lines above this |J|
     max_j_species: "H12C14N"  # only this catalogue's error doubles with |J|
                               # (SRM 2519a cross-check); null disables the cut
     slip_frac: 0.5            # phase slip = fringe rate off its local median by
