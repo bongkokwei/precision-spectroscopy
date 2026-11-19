@@ -1,27 +1,32 @@
+# keysight.yaml for a short fibre MZI: ~5 m path difference (4-7 m), FSR ~41 MHz.
+# The 62 m MZI (FSR 3.3 MHz) fringes at 318-427 kHz, far above this scope's
+# 91 kHz Nyquist at 2 Mpts over 11 s, so its phase is aliased. 5 m scales that to
+# ~25-34 kHz, >= 5 samples per fringe. Check the first scan with
+# `spectro plot --phase`: fringe rate ~25-34 kHz, no "steps backwards" warning.
 # Sweep is always continuous + oneway; that is hardcoded in acquire.py.
 
 scope:
   driver: dsox4024a         # dho4204 (default) | dsox4024a
   resource: "USB0::0x0957::0x17A6::MY55440446::INSTR"  # set to your scope's; rm.list_resources()
-  duration_s: 11.0          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
+  duration_s: 11          # capture window: 0.5 s pretrigger + 10 s sweep + 0.5 s margin.
                             # Was 20 s, which spent half the record on flyback
   points: 2_000_000         # per channel; sample rate = points / duration_s (here 182 kS/s)
   memory_depth: 4_000_000   # :ACQuire:POINts, total; split to 2 Mpts/ch with all four on
   trigger:                  # edge on channels.trigger (laser sweep-start TTL), NORMal sweep
-    level_v: 1.5
+    level_v: 2.0
     slope: POSitive         # POSitive | NEGative
   channels:                 # role -> physical channel + vertical setup
     mzi:     {ch: 1, scale: 1.00, offset: 3.50}
     gascell: {ch: 2, scale: 0.50, offset: 4.50}
-    dut:     {ch: 3, scale: 0.50, offset: 0.30}
-    trigger: {ch: 4, scale: 1.00, offset: 0.00}
+    dut:     {ch: 3, scale: 0.50, offset: 1.50}
+    trigger: {ch: 4, scale: 5.00, offset: 0.00}
 
 laser:
   resource: "GPIB0::21::INSTR"
   slot: 0
   channel: 1
-  start_nm: 1500.0
-  stop_nm: 1600.0
+  start_nm: 1520.0
+  stop_nm: 1620.0
   cycles: 0
   speed_nm_s: 10.0
   power: 12.0
@@ -55,9 +60,10 @@ process:
   # circular, since whatever the band-pass left is all there is left to measure,
   # so it reports a rate inside the band however wrong the band is.
   fringe_rate:
-    nperseg: 32768            # samples per segment: 13 ms at 2.5 MS/s, giving
-                              # 76 Hz resolution against ~140 Hz of chirp smear
-    search_hz: [5.0e+4, 1.2e+6]
+    nperseg: 4096             # samples per segment: 23 ms at 182 kS/s, giving
+                              # 44 Hz resolution; short enough to follow the ~30%
+                              # sweep-speed change across the scan
+    search_hz: [1.0e+4, 9.0e+4]
                               # where the fringe is looked for. The low edge is
                               # what keeps the peak off the intensity drift near
                               # DC, which is far stronger than the fringe itself
@@ -89,7 +95,7 @@ process:
     degree: 2                 # 3-4 buy nothing over a quadratic: measured
                               # 88.9-89.6 MHz RMS vs 90.2, the catalogue's own
                               # accuracy
-    max_j: 20                 # drop max_j_species lines above this |J|
+    max_j: 10                 # drop max_j_species lines above this |J|
     max_j_species: "H12C14N"  # only this catalogue's error doubles with |J|
                               # (SRM 2519a cross-check); null disables the cut
     slip_frac: 0.5            # phase slip = fringe rate off its local median by
@@ -121,7 +127,7 @@ process:
     expected_fwhm_hz: 2.0e+8  # order of magnitude only, the real linewidth
                               # comes out of the fit. 200 MHz matches the
                               # 20260813 ring (185-266 MHz over 125 modes)
-    snr: 100.0                # much higher than anchors.snr: this ring's
+    snr: 50.0                # much higher than anchors.snr: this ring's
                               # resonances stand ~400x the sample noise, so a
                               # low threshold finds noise inside their wings
     window_fwhm: 4.0          # fit half-window = this many expected FWHM ...
@@ -131,7 +137,7 @@ process:
 
   # Dispersion (scripts/calc_d2.py).
   dispersion:
-    ref_nm: 1550.0            # wavelength of mode mu = 0
+    ref_nm: 1570.0            # wavelength of mode mu = 0
     degree: 3
     n_mad: 3.0                # fit-residual rejection; the rejects are the
                               # avoided-mode-crossing candidates
@@ -227,19 +233,19 @@ gascell:
          P17: 1629.5910, P18: 1630.9860, P19: 1632.4289}
 
 heater:
-  driver: dg952                 # dg952 | voltage_ctrl; only that driver's block is read
+  driver: voltage_ctrl                 # dg952 | voltage_ctrl; only that driver's block is read
   dg952:
     resource: "USB0::0x1AB1::0x0643::DG9A252400191::0::INSTR"
     channel: 2                  # output channel (1 or 2)
   voltage_ctrl:                 # Arduino 12-bit DAC supply (github.com/bongkokwei/voltage-ctrl)
     com_port: "COM3"            # "/dev/ttyUSB0" on Linux
     baud_rate: 9600
-    channel: 8                  # DAC channel wired to the heater
-    v_max: 10.0                 # hard clamp; current limit = 1.1 * V / load_ohm
-  load_ohm: 50                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
+    channel: 32                  # DAC channel wired to the heater
+    v_max: 20.0                 # hard clamp; current limit = 1.1 * V / load_ohm
+  load_ohm: 6                  # heater resistance: DG952 load setting, voltage_ctrl current limit, aux_track power
   start_v: 0.0
-  stop_v: 5.0
-  steps: 101                     # voltage points (linspace), ~100 mV per step
+  stop_v: 20.0
+  steps: 401                     # voltage points (linspace), ~100 mV per step
   settle_s: 2.0                 # wait after setting voltage before acquiring
   window_ghz: 600.0              # frequency window around the target resonance
   target_thz: 193.41           # ≈ 1580 nm; nearest resonance in the cold scan
@@ -247,6 +253,6 @@ heater:
 
 run:
   dir: "data"
-  dut_name: "aux_ring_3"
+  dut_name: "aux_ring_2"
   # dut_name: "ring_pm_short"
   notes: ""
