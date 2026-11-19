@@ -65,34 +65,54 @@ def _configure_keysight(scope, cfg: dict) -> list[int]:
     """DSOX4024A counterpart of _configure_scope; same capture window, same timing."""
     scope_cfg = cfg["scope"]
     duration_s = scope_cfg["duration_s"]
-    scope.write(":TIMebase:MODE MAIN")  # roll mode has no trigger for :SINGle to latch
-    # Total memory; the scope splits it per channel pair (4 Mpts -> 2 Mpts each with all four on).
-    scope.write(f":ACQuire:POINts {scope_cfg['memory_depth']}")
-    # A numeric :POINts enters Digitizer mode, where the record is points / sample rate
-    # and the timebase no longer sets the rate. Without this the previous rate stays
-    # (1.25 GSa/s seen: 2 Mpts -> 1.6 ms record, shown as 160 us/div), not duration_s.
-    scope.write(f":ACQuire:SRATe {scope_cfg['points'] / duration_s:g}")
-    channels = []
-    for role, ch_cfg in scope_cfg["channels"].items():
-        ch = ch_cfg["ch"]
-        scope.set_channel(ch, scale_v=ch_cfg["scale"], offset_v=ch_cfg["offset"])
-        channels.append(ch)
-        log.info("ch%d = %s (%.3g V/div, offset %.3g V)", ch, role, ch_cfg["scale"], ch_cfg["offset"])
-    # Trigger on the laser's sweep-start TTL, edge PRETRIGGER_S into the record so
-    # sweeps.rising_edges sees the low-to-high step and a full sweep after it.
+
     post_s = duration_s - PRETRIGGER_S
     if post_s < sweep_duration_s(cfg):
         raise ValueError(
             f"scope.duration_s = {duration_s} s leaves {post_s:.2f} s after the "
             f"trigger, less than the {sweep_duration_s(cfg):.2f} s sweep"
         )
+
+    scope.write(":TIMebase:MODE MAIN")  # roll mode has no trigger for :SINGle to latch
+    # :POINts is total memory, split per channel pair (4 Mpts -> 2 Mpts/ch with all four on).
+    # A numeric value enters Digitizer mode: record = points / rate.
+    # :TIMebase:SCALe is not sent: 1.1 s/div got -222 in Digitizer mode (cause unknown;
+    # the guide says time/div is independent of the record there).
+    scope.write(f":ACQuire:POINts {scope_cfg['memory_depth']}")
+    scope.write(
+        f":ACQuire:SRATe {scope_cfg['points'] / duration_s:g}"
+    )  # points = per channel
+    scope.check_error()
+
+    channels = []
+    for role, ch_cfg in scope_cfg["channels"].items():
+        ch = ch_cfg["ch"]
+        scope.set_channel(ch, scale_v=ch_cfg["scale"], offset_v=ch_cfg["offset"])
+        channels.append(ch)
+        log.info(
+            "ch%d = %s (%.3g V/div, offset %.3g V)",
+            ch,
+            role,
+            ch_cfg["scale"],
+            ch_cfg["offset"],
+        )
+
+    # Trigger on the laser's sweep-start TTL, edge PRETRIGGER_S into the record so
+    # sweeps.rising_edges sees the low-to-high step and a full sweep after it.
     trig_ch = scope_cfg["channels"]["trigger"]["ch"]
     trig = scope_cfg["trigger"]
-    scope.set_trigger_edge(f"CHANnel{trig_ch}", trig["level_v"], trig["slope"], sweep="NORMal")
+    scope.set_trigger_edge(
+        f"CHANnel{trig_ch}", trig["level_v"], trig["slope"], sweep="NORMal"
+    )
     # ponytail: +position puts the trigger left of centre; flip the sign if the edge lands late in the record
-    scope.set_timebase(duration_s / 10, position_s=duration_s / 2 - PRETRIGGER_S)
+    scope.write(f":TIMebase:POSition {duration_s / 2 - PRETRIGGER_S:g}")
     scope.check_error()  # a refused setting otherwise only shows up as a timeout
-    rate = float(scope.query(":ACQuire:SRATe?"))  # the scope rounds to a rate it supports
+
+    rate = float(
+        scope.query(":ACQuire:SRATe?")
+    )  # the scope rounds to a rate it supports
+    # Not :TIMebase:RANGe?: that reports the run-mode record (capped at 1 Mpts);
+    # _capture_keysight uses :SINGle, which gets the full points/ch.
     record_s = scope_cfg["points"] / rate
     log.info("DSOX4024A: %.4g Sa/s, %.3g s record", rate, record_s)
     if record_s < PRETRIGGER_S + sweep_duration_s(cfg):
@@ -103,8 +123,33 @@ def _configure_keysight(scope, cfg: dict) -> list[int]:
     return sorted(channels)
 
 
-def _capture_keysight(scope, channels: list[int]) -> tuple[np.ndarray, dict[int, np.ndarray]]:
-    scope.digitise(*channels, single=True)  # :SINGle: full memory; waits for the CH trigger edge
+def _capture_keysight(
+    scope, channels: list[int]
+) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    scope.digitise(
+        *channels, single=True
+    )  # :SINGle: full memory; waits for the CH trigger edge
+    # VIEW is per waveform source. The default MAIN returns only the on-screen part;
+    # ALL (Digitizer mode only) returns the whole record. get_waveform leaves VIEW alone.
+    for ch in channels:
+        scope.write(f":WAVeform:SOURce CHANnel{ch}")
+        scope.write(":WAVeform:VIEW ALL")
+    scope.check_error()
+    traces = {ch: scope.get_waveform(ch) for ch in channels}
+    t = traces[channels[0]][0]
+    log.info("captured %d points/ch over %.2f s", len(t), t[-1] - t[0])
+    return t, {ch: v for ch, (_, v) in traces.items()}
+
+
+def _capture_keysight(
+    scope, channels: list[int]
+) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    scope.digitise(*channels, single=True)
+    # VIEW is per waveform source; ALL (Digitizer mode only) returns the whole record,
+    # not just the on-screen part. get_waveform doesn't touch it.
+    for ch in channels:
+        scope.write(f":WAVeform:SOURce CHANnel{ch}")
+        scope.write(":WAVeform:VIEW ALL")
     traces = {ch: scope.get_waveform(ch) for ch in channels}
     t = traces[channels[0]][0]
     log.info("captured %d points/ch over %.2f s", len(t), t[-1] - t[0])
@@ -140,7 +185,9 @@ def write_h5(
     log.info("wrote %s (%.2f GB)", path, path.stat().st_size / 1e9)
 
 
-def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = True) -> Path:
+def run(
+    cfg: dict, config_path: str | Path | None = None, restart_scope: bool = True
+) -> Path:
     """Execute one sweep and return the path to the written HDF5 file."""
     # Imported here so processing-only installs work without a VISA stack.
     from agilent_8164b import Agilent8164B
@@ -172,10 +219,13 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
         # The sweep starts before the scope arms and repeats (cycles: 0), so wait up to
         # one sweep + flyback for the next edge, then the record, plus slack.
         scope_dev = DSOX4024A(
-            scope_cfg["resource"], timeout=2 * sweep_duration_s(cfg) + scope_cfg["duration_s"] + 30
+            scope_cfg["resource"],
+            timeout=2 * sweep_duration_s(cfg) + scope_cfg["duration_s"] + 30,
         )
     else:
-        raise ValueError(f"scope.driver must be 'dho4204' or 'dsox4024a', got {driver!r}")
+        raise ValueError(
+            f"scope.driver must be 'dho4204' or 'dsox4024a', got {driver!r}"
+        )
     keysight = driver == "dsox4024a"
 
     with (
@@ -186,7 +236,10 @@ def run(cfg: dict, config_path: str | Path | None = None, restart_scope: bool = 
             channel=laser_cfg["channel"],
         ) as laser,
     ):
-        idn = {"scope": scope.identify() if keysight else scope.idn(), "laser": laser.identify()}
+        idn = {
+            "scope": scope.identify() if keysight else scope.idn(),
+            "laser": laser.identify(),
+        }
         log.info("scope: %s", idn["scope"])
         log.info("laser: %s", idn["laser"])
 
